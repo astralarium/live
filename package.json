@@ -1,0 +1,35 @@
+{
+  "name": "@astralarya/live",
+  "version": "0.1.0",
+  "description": "A log-tailing MCP server",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "live": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "fs-ext": "^2.0.0",
+    "node-pty": "^1.0.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/fs-ext": "^2.0.3",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}
