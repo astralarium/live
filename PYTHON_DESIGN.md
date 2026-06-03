@@ -102,6 +102,9 @@ Prints a snippet for users to add to their agent docs. Positional args are used 
 This project uses `live`, a CLI streamer. The following sessions are available:
   * [FILL IN HERE]
 
+List available sessions:
+  live ls [-a] [--json]
+
 Read output from a live session:
   live tail --since-line N <SELECTOR>
     stdout: lines with n>N
@@ -113,9 +116,6 @@ Read output from a live session:
   SELECTOR: UUID prefix or NAME (newest match)
 
 Pipe output from `live tail` to other tools like `grep`.
-
-List available sessions:
-  live ls [-a] [--json]
 ```
 
 ## On-disk layout
