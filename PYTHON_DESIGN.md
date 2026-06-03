@@ -14,7 +14,7 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 | `live run [-n NAME] [--] <cmd…>`                                          | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                          |
 | `live ls [-n NAME] [-a] [--json]`                                    | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                   |
 | `live cat [-v] <SELECTOR>`                                           | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata.                                                                                                                           |
-| `live tail [-v] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `--since-line N` outputs lines after `N` for resumable polling and implies `-v`.                                                                                 |
+| `live tail [-f] [-v] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `--since-line N` outputs lines after `N` for resumable polling and implies `-v`.                                          |
 | `live rm [-f] [--all-exited] <SELECTOR…>`                            | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed. |
 | `live init`                                                               | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                       |
 | `live llms.txt`                                                           | Print a token-minimal agent guide for `live tail --since-line` polling.                                                                                                                              |
@@ -73,6 +73,17 @@ Resumable polling for agents. Outputs lines with `n > N` to stdout. `--since-lin
 - Gap (`N + 1 < firstLine`): see [Verbose output](#verbose-output); stdout starts from the oldest retained line. Exit 0.
 - Hung session: stdout drains whatever's newly indexed, then `live: status=hung …` appears before the trailer. The session is still alive (flock held) — polling agents can continue but should warn the user; a subsequent poll either resumes producing lines or eventually reports an exit.
 - Exited session: drained like any live session — tail emits the remaining lines, then the exit trailer (`live: exit-code=<N>` or `live: exit=inconsistent`). Polling loops can stop on that trailer.
+
+### `live tail -f`
+
+Follow mode for humans. Emit the initial slice (`-n LINES`, `-c BYTES`, `--since-line N`, or the default last-10 lines), then watch the active `lines.*.idx` and stream each new line as it's indexed.
+
+- Event-driven, no polling: `select.kqueue` on macOS (watch the idx fd for `NOTE_WRITE | NOTE_EXTEND`), inotify on Linux/WSL via a small `ctypes` shim (`IN_MODIFY` on the idx path).
+- Rotation: on the same watch, listen for the parent dir's `NOTE_WRITE` (kqueue) / `IN_CREATE` (inotify) to detect a new `lines.NNNN+1.idx`; re-arm the watch on the new active segment.
+- On hung detection (staleness crosses `3 × heartbeatSec` with no event): emit the hung stderr line once, keep watching. A heartbeat or write clears the hung state.
+- On graceful or torn exit: drain remaining lines, emit the exit trailer, exit 0.
+- On `SIGINT` from the user's terminal: clean exit without trailer.
+- Composes with `--since-line`: starts from the cursor, then follows. (Agents should still use one-shot `--since-line` polls; `-f` holds a process open, which agents typically don't want.)
 
 ### `live ls`
 
@@ -310,7 +321,7 @@ live completion fish > ~/.config/fish/completions/live.fish
 
 Python 3.14+. `pyproject.toml` with `hatchling`, `[project.scripts] live = "live.cli:main"`. PyPI: `astralarya-live`. Install via `pipx install astralarya-live` or `uv tool install astralarya-live`.
 
-Zero runtime dependencies. PTY, flock, ioctl, signals, atomic rename, struct packing, JSON parsing, and UUIDv7 are all stdlib. No native build step.
+Zero runtime dependencies. PTY, flock, ioctl, signals, atomic rename, struct packing, JSON parsing, and UUIDv7 are all stdlib. `select.kqueue` covers Darwin; Linux/WSL gets inotify via an in-tree `ctypes` shim around `inotify_init1` / `inotify_add_watch` / `read`. No native build step.
 
 ## Defaults
 
