@@ -29,17 +29,16 @@ Read verbs and the MCP server walk up from cwd (or `serverCwd`) to the nearest `
 
 `run` targets a single `.live/`: nearest one walking up from cwd, fallback `~/.live/` (auto-created on first use).
 
-Walker rules: don't descend into a found `.live/`; skip `node_modules`, `.git`, `.svn`, `.hg`, `__pycache__`, `.venv`, `venv`, `dist`, `build`, `target`; `is_dir(follow_symlinks=False)`; silently skip unreadable subtrees.
+Walker rules: don't descend into `node_modules`, dotdirs other than `.live/`, or a found `.live/`; `is_dir(follow_symlinks=False)`; silently skip unreadable subtrees.
 
 ### Selectors
 
 A session selector is one of:
 
-- **`@latest`** — most recent session in scope.
-- **`--name NAME`** — most recent session whose `meta.name` equals `NAME`. (No `-n`; `tail -n` is line count.)
+- **`--name NAME`** — sessions whose `meta.name` equals `NAME`. For `cat`/`tail`, resolves to the most recent match. For `rm`, resolves to every match. (No `-n`; `tail -n` is line count.)
 - **Positional UUID-or-prefix** — unique match required; ambiguous → error listing candidates.
 
-`cat`, `tail`: selector optional, default `@latest`. `rm`: required; Unix `rm` semantics for multiple selectors. `--all-exited` substitutes for selectors.
+Selectors are required on `cat`, `tail`, `rm`. `rm` accepts multiple (Unix `rm` semantics); `--all-exited` substitutes for selectors on `rm`.
 
 "Most recent" = UUIDv7 lex-descending sort, top result.
 
@@ -82,23 +81,19 @@ UUIDv7 (RFC 9562) via stdlib `uuid.uuid7()`. Standard 36-char hyphenated hex; le
   "name": "dev",
   "startedAt": 1717200000000,
   "exitedAt": null,
-  "exitCode": null,
-  "segments": [
-    { "i": 3, "firstN": 142, "firstT": 1717200005012 },
-    { "i": 4, "firstN": 198, "firstT": 1717200008456 }
-  ]
+  "exitCode": null
 }
 ```
 
 - `name` present only when started with `-n NAME`.
 - Timestamps are integer milliseconds: `int(time.time() * 1000)`.
-- `segments` length is bounded by `maxKb / segmentKb`. `firstSegment = segments[0].i`, `lastSegment = segments[-1].i`.
 
-Writer-only. Written at: session start, every rotation, every retention drop, graceful exit. Atomic via `tempfile.NamedTemporaryFile` → `os.fsync` → `os.replace`.
+Writer-only. Written at session start and graceful exit. Atomic via `tempfile.NamedTemporaryFile` → `os.fsync` → `os.replace`.
 
-Derived watermarks:
+Segment list and watermarks are derived from the filesystem:
 
-- `firstLine` = `segments[0].firstN`.
+- Segments: sort `stream.NNNN.log` / `lines.NNNN.idx` filenames numerically. `firstSegment` / `lastSegment` are the min/max.
+- `firstLine` = first record's `n` in `lines.<firstSegment>.idx`.
 - `lastLine` = unpack the trailing 16 bytes of `lines.<lastSegment>.idx`; if empty, walk back one segment.
 - `count` = `lastLine − firstLine + 1`.
 
@@ -110,7 +105,13 @@ Append-only binary, 16-byte records: `struct.pack(">QQ", n, t)` — uint64 BE li
 
 ## Recording
 
-Child runs under stdlib `pty.fork()`. Parent loops on `select.select([master_fd, wakeup_fd], ...)`, reads the master fd, writes bytes to `sys.stdout.buffer` and appends them to the current `stream.NNNN.log`. Child runs `os.setsid()` then `os.execvp`. `SIGWINCH` propagates terminal size via `ioctl(TIOCGWINSZ)` / `ioctl(TIOCSWINSZ)`.
+Goal: `live <cmd>` is transparent — keystrokes, prompts, Ctrl-C, and resize reach `<cmd>` directly.
+
+Child: `pty.fork()` → `os.execvp`. Parent puts stdin in raw mode (`tty.setraw(0)`, saved and restored on exit) and selects on `[0, master_fd, wakeup_fd]`:
+
+- `master_fd` → write to `sys.stdout.buffer`, append to `stream.NNNN.log`, update line index.
+- stdin → write to `master_fd`. The PTY's line discipline routes ^C to the child's pgroup.
+- `wakeup_fd` (`signal.set_wakeup_fd`) delivers signals: `SIGWINCH` propagates size via `TIOCGWINSZ` / `TIOCSWINSZ`; `SIGTERM` / `SIGHUP` forward to the child and graceful-exit. No `SIGINT` handler.
 
 ### Line indexing
 
@@ -139,9 +140,11 @@ Configurable per `.live/`:
 - `segmentKb` (default 64) — rotate after a completed line carries the active segment past this.
 - `maxKb` (default 512) — total retained `stream.*.log` bytes per session.
 
-**Rotation.** When the active segment hits `segmentKb` at a line boundary, close it and open a new pair. Lines never split; an oversize line produces a fat segment and rotates after. On rotation: append entry to `meta.segments`, atomic meta write, then open new segment files.
+**Rotation.** When the active segment hits `segmentKb` at a line boundary, close it and open a new pair. Lines never split; an oversize line produces a fat segment and rotates after. Pure filesystem op — no meta write.
 
-**Retention.** After each rotation, sum `stream.*.log` bytes. While over `maxKb`, `os.unlink` the lowest-numbered pair, pop `meta.segments[0]`, atomic meta write.
+**Reader tolerance.** Readers may briefly see one of the new pair before the other (recorder creates `stream.NNNN+1.log` then `lines.NNNN+1.idx`). Treat `ENOENT` on the highest-numbered segment's files as empty and walk back one for `lastLine`. `ENOENT` on any lower segment is a real error.
+
+**Retention.** After each rotation, sum `stream.*.log` bytes. While over `maxKb`, `os.unlink` the lowest-numbered pair.
 
 **Reader race.** Between a `cursor` response and the agent opening the files, retention may unlink the lowest segment. `open()` returns `ENOENT`. The next `cursor` returns a fresh list with `gap: true` if tracked lines were dropped.
 
@@ -151,7 +154,7 @@ Configurable per `.live/`:
 
 ### Sweep
 
-Runs on every `live` verb that touches sessions and every MCP `list_sessions` call:
+Runs on every `live` verb that touches sessions and every MCP `list_sessions` / `cursor` call. Concurrent sweepers are race-safe: `O_EXCL` for `deadAt` creation, unlinks tolerate `ENOENT`.
 
 ```
 for each session in this .live/sessions/:
@@ -206,7 +209,6 @@ Started by `live mcp`. Official `mcp` Python SDK over stdio. Tool I/O is `pydant
 Per-connection state (lives for the stdio process lifetime):
 
 - `cursors: dict[tuple[str, str], int]` — `(path, session_id)` → last-returned line.
-- `sweep_cooldown: dict[str, float]` — `.live/` path → last sweep monotonic timestamp.
 
 ### `list_sessions`
 
@@ -251,13 +253,16 @@ Returns:
 Algorithm:
 
 ```python
+segs = sorted_segment_numbers(path)            # from `lines.NNNN.idx` filenames
+if not segs or since_line >= lastLine(path):
+    return caught_up()
 target = since_line + 1
-first_ns = [s["firstN"] for s in meta.segments]
-i = bisect.bisect_right(first_ns, target) - 1
-if i < 0:
+first_ns = [first_n(path, i) for i in segs]    # 8 bytes per segment, K ≤ maxKb/segmentKb
+k = bisect.bisect_right(first_ns, target) - 1
+if k < 0:
     return all_segments_with_gap_flag()
-chosen = meta.segments[i:]
-skip_lines = since_line - chosen[0]["firstN"] + 1
+chosen = segs[k:]
+skip_lines = since_line - first_ns[k] + 1
 ```
 
 Edge cases:
