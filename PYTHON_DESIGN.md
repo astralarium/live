@@ -13,8 +13,8 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `live run [-n NAME] [--] <cmd…>`                                     | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                          |
 | `live ls [-g] [-n NAME] [-a] [--json]`                               | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                   |
-| `live cat [-g] <SELECTOR>`                                           | Concatenate all `stream.*.log` for the session.                                                                                                                                                      |
-| `live tail [-g] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `--since-line N` outputs lines after `N` for resumable polling.                                                                                                  |
+| `live cat [-g] [-v] <SELECTOR>`                                           | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata.                                                                                                                       |
+| `live tail [-g] [-v] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `--since-line N` outputs lines after `N` for resumable polling and implies `-v`.                                                                             |
 | `live rm [-g] [-f] [--all-exited] <SELECTOR…>`                       | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed. |
 | `live init`                                                          | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                       |
 | `live completion <bash\|zsh\|fish>`                                  | Print the shell completion script.                                                                                                                                                                   |
@@ -46,13 +46,36 @@ Selectors are required on `cat`, `tail`, `rm`. `rm` accepts multiple (Unix `rm` 
 
 `live run` consumes `-n NAME` / `--name=NAME`; everything from the first non-flag token (or after `--`) is the opaque wrapped command.
 
+### Verbose output
+
+`cat` and `tail` accept `-v` / `--verbose`. With `-v`, stdout is unchanged and stderr carries metadata lines; without it, stderr is silent on success. `--since-line` implies `-v`.
+
+All verbose lines are prefixed `live: `. The trailing line of any verbose read is the identity/cursor stamp:
+
+```
+live: id=<uuid> at-line=<L>
+```
+
+`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed. Agents using `--since-line` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a `--name` selector drifting to a new session — reset the cursor to `0` on UUID change.
+
+Additional stderr lines may precede the trailer:
+
+- Gap (`N + 1 < firstLine` because retention dropped lines, or `cat` reading a session whose oldest segment has been unlinked): `live: dropped <k> lines (since=<N>, first retained=<firstLine>)`. For `cat`, `<N>` is `0`.
+- Cursor ahead (`tail --since-line` with `N > lastLine`, likely session swap): `live: since-line=<N> > at-line=<L>; check id`.
+- Exited session (graceful): `live: exit-code=<N>`. Torn recordings (`deadAt = "inconsistent"`) emit `live: exit=inconsistent` instead. Omitted for running sessions.
+
+Errors are always printed regardless of `-v`, with the same `live: ` prefix:
+
+- Missing session: stderr `live: no such session: <selector>`, exit 2. No stdout, no trailer.
+
 ### `live tail --since-line`
 
-Resumable polling for agents. Outputs lines with `n > N` to stdout. `--since-line` is mutually exclusive with `-n` / `-c`.
+Resumable polling for agents. Outputs lines with `n > N` to stdout. `--since-line` is mutually exclusive with `-n` / `-c`, and implies `-v` (see [Verbose output](#verbose-output)).
 
-- Caught up (`N >= lastLine`): empty stdout, exit 0.
-- Gap (`N + 1 < firstLine` because retention dropped lines): output starts from the oldest retained line; stderr gets one line, `live tail: dropped <k> lines (since=<N>, first retained=<firstLine>)`. Exit 0.
-- Agent loop: track `N` in conversation state; after each call, advance `N` by the number of output lines.
+- Caught up (`N == lastLine`): empty stdout, trailer, exit 0.
+- Cursor ahead (`N > lastLine`): see [Verbose output](#verbose-output).
+- Gap (`N + 1 < firstLine`): see [Verbose output](#verbose-output); stdout starts from the oldest retained line. Exit 0.
+- Exited session: drained like any live session — tail emits the remaining lines and the trailer. Lifecycle status (still running vs. exited) is observed via `live ls --json`, not `tail`.
 
 ### `live ls`
 
