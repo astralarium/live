@@ -1,3 +1,4 @@
-allowBuilds:
-  fs-ext: set this to true or false
-  node-pty: set this to true or false
+onlyBuiltDependencies:
+  - esbuild
+  - fs-ext
+  - node-pty

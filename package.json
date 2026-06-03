@@ -13,23 +13,28 @@
   "files": [
     "dist",
     "README.md",
+    "DESIGN.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
     "clean": "rm -rf dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pretest": "tsc -p tsconfig.build.json",
+    "test": "HOME=$(mktemp -d /tmp/live-test-home-XXXXXX) node --import tsx --test --test-reporter spec test/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "fs-ext": "^2.0.0",
     "node-pty": "^1.0.0",
-    "ulid": "^2.3.0"
+    "ulid": "^2.3.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/fs-ext": "^2.0.3",
     "@types/node": "^20.0.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.4.0"
   }
 }
