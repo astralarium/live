@@ -33,7 +33,7 @@ def test_full_cycle(project: Path, run_live) -> None:
     text = cat.stdout.replace("\r", "")
     assert "one\ntwo\nthree\n" in text
 
-    since = run_live(project, "tail", "--since-line", "1", "smoke")
+    since = run_live(project, "tail", "--since", "1", "smoke")
     text = since.stdout.replace("\r", "")
     assert "two" in text and "three" in text
     assert "one" not in text.split("\n", 1)[0]

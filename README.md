@@ -18,7 +18,7 @@ uv tool install astralarya-live
 live run -n dev npm run dev   # record under PTY, mirror to terminal
 live ls                       # list sessions started under cwd
 live ls -g                    # list all sessions
-live tail --since-line 0 dev  # resumable polling for agents
+live tail --since 0 dev  # resumable polling for agents
 live cat dev                  # full output
 live rm dev                   # delete
 ```

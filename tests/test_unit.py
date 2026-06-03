@@ -42,20 +42,20 @@ def test_strip_ansi_passthrough_for_clean_text() -> None:
 
 
 @pytest.mark.parametrize(
-    "explicit_strip,explicit_raw,since_line,is_tty,expected",
+    "explicit_strip,explicit_raw,is_since,is_tty,expected",
     [
         (False, False, False, False, True),   # default: not tty -> strip
         (False, False, False, True, False),   # default: tty -> raw
-        (False, False, True, True, True),     # --since-line wins
+        (False, False, True, True, True),     # --since wins
         (True, False, False, True, True),     # --strip-ansi wins
         (False, True, False, False, False),   # --raw wins
-        (False, True, True, False, False),    # --raw still wins over since-line
+        (False, True, True, False, False),    # --raw still wins over --since
     ],
 )
 def test_should_strip_ansi_matrix(
     explicit_strip: bool,
     explicit_raw: bool,
-    since_line: bool,
+    is_since: bool,
     is_tty: bool,
     expected: bool,
 ) -> None:
@@ -63,7 +63,7 @@ def test_should_strip_ansi_matrix(
         should_strip_ansi(
             explicit_strip=explicit_strip,
             explicit_raw=explicit_raw,
-            is_since_line=since_line,
+            is_since=is_since,
             stdout_is_tty=is_tty,
         )
         is expected

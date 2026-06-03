@@ -59,7 +59,7 @@ def _make_parser() -> argparse.ArgumentParser:
                       help="Print the last N lines.")
     mode.add_argument("-c", "--bytes", dest="bytes_", type=int, default=None,
                       help="Print the last K bytes.")
-    mode.add_argument("--since-line", dest="since_line", type=int, default=None,
+    mode.add_argument("--since", type=int, default=None,
                       help="Output lines with n > N (resumable polling).")
     tail_p.add_argument("selector")
     tail_p.set_defaults(func=verbs.cmd_tail)

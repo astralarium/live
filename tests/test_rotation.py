@@ -62,7 +62,7 @@ def test_retention_drops_oldest_segments(project: Path, run_live) -> None:
     assert info["lastLine"] == 250
 
 
-def test_since_line_after_retention_reports_gap(project: Path, run_live) -> None:
+def test_since_after_retention_reports_gap(project: Path, run_live) -> None:
     _configure(project, segment_kb=1, max_kb=2)
     # Lines wide enough that 250 of them blow well past the 2 KB retention cap.
     run_live(
@@ -76,6 +76,6 @@ def test_since_line_after_retention_reports_gap(project: Path, run_live) -> None
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
-    poll = run_live(project, "tail", "--since-line", "0", "spam")
+    poll = run_live(project, "tail", "--since", "0", "spam")
     assert "dropped" in poll.stderr
     assert "first retained=" in poll.stderr

@@ -57,7 +57,7 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
         assert info["status"] == "hung"
 
         # tail -v should also surface "status=hung last-activity=<s>".
-        tail = run_live(project, "tail", "--since-line", "0", "longrun")
+        tail = run_live(project, "tail", "--since", "0", "longrun")
         assert "status=hung last-activity=" in tail.stderr
     finally:
         proc.send_signal(signal.SIGTERM)

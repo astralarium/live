@@ -169,7 +169,7 @@ def cmd_cat(args) -> int:
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
-        is_since_line=False,
+        is_since=False,
         stdout_is_tty=sys.stdout.isatty(),
     )
     _emit_read_result(result, info, cfg, verbose=args.verbose, strip=strip)
@@ -182,16 +182,16 @@ def cmd_tail(args) -> int:
         return 2
     info, cfg = res
 
-    is_since_line = args.since_line is not None
+    is_since = args.since is not None
     # Mutual exclusivity is enforced by argparse.
 
-    if is_since_line:
+    if is_since:
         verbose = True  # implied
-        result = lines_since(info.path, since=args.since_line)
+        result = lines_since(info.path, since=args.since)
         # Cursor-ahead message (N > lastLine).
-        if args.since_line > result.last_line and result.last_line:
+        if args.since > result.last_line and result.last_line:
             result.stderr_lines.append(
-                f"since-line={args.since_line} > at-line={result.last_line}; check id"
+                f"since={args.since} > at-line={result.last_line}; check id"
             )
     else:
         verbose = args.verbose
@@ -200,7 +200,7 @@ def cmd_tail(args) -> int:
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
-        is_since_line=is_since_line,
+        is_since=is_since,
         stdout_is_tty=sys.stdout.isatty(),
     )
 
@@ -301,7 +301,7 @@ List available sessions:
   live ls [-a] [--json]
 
 Read output from a live session:
-  live tail --since-line N <SELECTOR>
+  live tail --since N <SELECTOR>
     stdout:  lines with n>N
     trailer: live: id=<uuid> at-line=<L>
     resume:  next N = <L>; reset N=0 if <uuid> changes

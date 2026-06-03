@@ -63,7 +63,7 @@ _live_complete() {
             ;;
         tail)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes --since-line" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes --since" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
             fi
@@ -136,7 +136,7 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
-                        '--since-line=:cursor:' \
+                        '--since=:cursor:' \
                         '1:selector:_live_sessions'
                     ;;
                 rm)
@@ -218,7 +218,7 @@ complete -c live -n "__fish_seen_subcommand_from tail" -l strip-ansi
 complete -c live -n "__fish_seen_subcommand_from tail" -l raw
 complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last N lines'
 complete -c live -n "__fish_seen_subcommand_from tail" -s c -l bytes -r -d 'Last K bytes'
-complete -c live -n "__fish_seen_subcommand_from tail" -l since-line -r -d 'Resumable cursor'
+complete -c live -n "__fish_seen_subcommand_from tail" -l since -r -d 'Resumable cursor'
 
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'Kill running recorders'

@@ -40,7 +40,7 @@ def should_strip_ansi(
     *,
     explicit_strip: bool,
     explicit_raw: bool,
-    is_since_line: bool,
+    is_since: bool,
     stdout_is_tty: bool,
 ) -> bool:
     """Resolve --strip-ansi/--raw/default-by-TTY rules."""
@@ -48,7 +48,7 @@ def should_strip_ansi(
         return False
     if explicit_strip:
         return True
-    if is_since_line:
+    if is_since:
         return True
     return not stdout_is_tty
 

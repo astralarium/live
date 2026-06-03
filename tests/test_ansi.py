@@ -36,15 +36,15 @@ def test_cat_explicit_strip_ansi(project: Path, run_live) -> None:
     assert "\x1b[" not in out
 
 
-def test_tail_since_line_always_strips(project: Path, run_live) -> None:
+def test_tail_since_always_strips(project: Path, run_live) -> None:
     _record(project, run_live)
-    # --since-line implies --strip-ansi even without --strip-ansi flag.
-    out = run_live(project, "tail", "--since-line", "0", "colors").stdout
+    # --since implies --strip-ansi even without --strip-ansi flag.
+    out = run_live(project, "tail", "--since", "0", "colors").stdout
     assert "\x1b[" not in out
 
 
-def test_tail_since_line_raw_keeps_ansi(project: Path, run_live) -> None:
+def test_tail_since_raw_keeps_ansi(project: Path, run_live) -> None:
     _record(project, run_live)
-    # --raw overrides the --since-line default.
-    out = run_live(project, "tail", "--since-line", "0", "--raw", "colors").stdout
+    # --raw overrides the --since default.
+    out = run_live(project, "tail", "--since", "0", "--raw", "colors").stdout
     assert "\x1b[31m" in out
