@@ -24,7 +24,6 @@ from .reader import (
 )
 from .sweep import SessionInfo, session_info
 from .watcher import new_watcher
-from .paths import Scope
 
 
 _INTERRUPTED = False
@@ -37,7 +36,6 @@ def _on_sigint(_sig, _frm) -> None:
 
 def follow_session(
     *,
-    scope: Scope,
     cfg: Config,
     info: SessionInfo,
     initial_cursor: int,

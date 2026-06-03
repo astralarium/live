@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import CONFIG_NAME, HOME_LIVE, Scope
+from .paths import config_path
 
 
 DEFAULTS = {
@@ -40,23 +40,16 @@ class Config:
         return self.segment_kb * 1024
 
 
-def _load_layer(path: Path, *, project_layer: bool) -> dict[str, int]:
-    """Read one config layer; return {} for missing/malformed.
-
-    Asymmetric error policy: per-project malformed is logged + ignored,
-    home malformed warns and falls back to defaults.
-    """
+def _load_file(path: Path) -> dict[str, int]:
+    """Read config; return {} for missing/malformed (warns on malformed)."""
     if not path.exists():
         return {}
     try:
         with path.open("r", encoding="utf-8") as f:
             raw = json.load(f)
     except (OSError, ValueError) as e:
-        msg = f"live: malformed config at {path}: {e}"
-        if project_layer:
-            print(msg, file=sys.stderr)
-        else:
-            print(f"{msg} — falling back to defaults", file=sys.stderr)
+        print(f"live: malformed config at {path}: {e} — falling back to defaults",
+              file=sys.stderr)
         return {}
     if not isinstance(raw, dict):
         return {}
@@ -70,22 +63,15 @@ def _load_layer(path: Path, *, project_layer: bool) -> dict[str, int]:
     return out
 
 
-def load_config(scope: Scope) -> Config:
-    """Layered config: per-`.live/` over home over compiled defaults."""
-    HOME_LIVE.mkdir(mode=0o700, exist_ok=True)
-    home_cfg = HOME_LIVE / CONFIG_NAME
-    if not home_cfg.exists():
+def load_config() -> Config:
+    """Read `~/.live/config.json`, falling back per-field to compiled defaults."""
+    cfg_path = config_path()
+    if not cfg_path.exists():
         try:
-            home_cfg.write_text(json.dumps(DEFAULTS) + "\n")
+            cfg_path.write_text(json.dumps(DEFAULTS) + "\n")
         except OSError:
             pass
-    home = _load_layer(home_cfg, project_layer=False)
-    project = (
-        _load_layer(scope.live_dir / CONFIG_NAME, project_layer=True)
-        if scope.live_dir != HOME_LIVE
-        else {}
-    )
-    merged = {**DEFAULTS, **home, **project}
+    merged = {**DEFAULTS, **_load_file(cfg_path)}
     return Config(
         ttl_days=int(merged["ttlDays"]),
         max_kb=int(merged["maxKb"]),

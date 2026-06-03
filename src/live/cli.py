@@ -28,12 +28,16 @@ def _make_parser() -> argparse.ArgumentParser:
     ls_p = sub.add_parser("ls", help="List sessions in scope.")
     ls_p.add_argument("-n", "--name", default=None, help="Filter to this NAME.")
     ls_p.add_argument("-a", "--all", action="store_true", help="Include exited.")
+    ls_p.add_argument("-g", "--global", action="store_true", dest="global_",
+                      help="Show sessions from all directories.")
     ls_p.add_argument("--json", action="store_true", help="Emit NDJSON.")
     ls_p.set_defaults(func=verbs.cmd_ls)
 
     # cat
     cat_p = sub.add_parser("cat", help="Concatenate stream.*.log for a session.")
     cat_p.add_argument("-v", "--verbose", action="store_true")
+    cat_p.add_argument("-g", "--global", action="store_true", dest="global_",
+                       help="Resolve selector against all sessions.")
     ag = cat_p.add_mutually_exclusive_group()
     ag.add_argument("--strip-ansi", action="store_true", dest="strip_ansi")
     ag.add_argument("--raw", action="store_true", dest="raw")
@@ -45,6 +49,8 @@ def _make_parser() -> argparse.ArgumentParser:
     tail_p.add_argument("-v", "--verbose", action="store_true")
     tail_p.add_argument("-f", "--follow", action="store_true",
                         help="Follow new lines until the recorder exits.")
+    tail_p.add_argument("-g", "--global", action="store_true", dest="global_",
+                        help="Resolve selector against all sessions.")
     ag = tail_p.add_mutually_exclusive_group()
     ag.add_argument("--strip-ansi", action="store_true", dest="strip_ansi")
     ag.add_argument("--raw", action="store_true", dest="raw")
@@ -62,14 +68,12 @@ def _make_parser() -> argparse.ArgumentParser:
     rm_p = sub.add_parser("rm", help="Delete sessions.")
     rm_p.add_argument("-f", "--force", action="store_true",
                       help="SIGTERM running recorders; ignore nonexistent.")
+    rm_p.add_argument("-g", "--global", action="store_true", dest="global_",
+                      help="Resolve selectors against all sessions.")
     rm_p.add_argument("--all-exited", action="store_true", dest="all_exited",
                       help="Remove every dead session in scope.")
     rm_p.add_argument("selectors", nargs="*")
     rm_p.set_defaults(func=verbs.cmd_rm)
-
-    # init
-    init_p = sub.add_parser("init", help="Create .live/ in cwd.")
-    init_p.set_defaults(func=verbs.cmd_init)
 
     # llms.txt
     llms_p = sub.add_parser("llms.txt", help="Print the agent guide snippet.")

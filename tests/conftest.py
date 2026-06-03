@@ -14,11 +14,17 @@ SRC = PROJECT_ROOT / "src"
 
 
 @pytest.fixture
-def live_env() -> dict:
+def live_env(tmp_path: Path) -> dict:
+    """Env for `live` subprocesses with $HOME pointed at tmp_path.
+
+    `Path.home()` (and therefore `~/.live/`) resolves to `tmp_path/.live/`,
+    isolating the test from the user's real session store.
+    """
     env = dict(os.environ)
     src = str(SRC)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{src}{os.pathsep}{existing}" if existing else src
+    env["HOME"] = str(tmp_path)
     return env
 
 
@@ -39,7 +45,6 @@ def run_live(live_env):
 
 
 @pytest.fixture
-def project(tmp_path: Path, run_live) -> Path:
-    """An initialized .live/ project."""
-    run_live(tmp_path, "init")
+def project(tmp_path: Path) -> Path:
+    """A working directory that doubles as `$HOME` for the isolated `~/.live/` store."""
     return tmp_path

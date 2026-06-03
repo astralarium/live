@@ -12,7 +12,6 @@ from pathlib import Path
 
 from .config import Config, load_config
 from .lock import kill_pid, probe_held, read_lock_pid
-from .paths import Scope, init_project_live_dir, resolve_scope
 from .reader import (
     ReadResult,
     cat_all,
@@ -80,17 +79,14 @@ def _emit_read_result(
 # ----- verbs -----
 
 
-def cmd_init(args) -> int:
-    cwd = Path.cwd()
-    live = init_project_live_dir(cwd)
-    print(f"initialized {live}")
-    return 0
+def _scope_filter(args) -> Path | None:
+    """cwd filter for read verbs; None means global view (`-g`)."""
+    return None if getattr(args, "global_", False) else Path.cwd()
 
 
 def cmd_run(args) -> int:
-    scope = resolve_scope()
-    sweep_all(scope, load_config(scope))
-    cfg = load_config(scope)
+    cfg = load_config()
+    sweep_all(cfg)
     cmd = list(args.cmd)
     # argparse.REMAINDER hands us "--" as the first token if the user wrote it
     # to defend a flag-starting command. Strip it so execvp gets the real argv.
@@ -99,14 +95,13 @@ def cmd_run(args) -> int:
     if not cmd:
         _err("run: missing command")
         return 2
-    return record(scope, cfg, cmd, name=args.name)
+    return record(cfg, cmd, name=args.name)
 
 
 def cmd_ls(args) -> int:
-    scope = resolve_scope()
-    cfg = load_config(scope)
-    sweep_all(scope, cfg)
-    sessions = list_sessions(scope, cfg)
+    cfg = load_config()
+    sweep_all(cfg)
+    sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
 
     if args.name:
         sessions = [s for s in sessions if s.meta.name == args.name]
@@ -151,24 +146,25 @@ def cmd_ls(args) -> int:
     return 0
 
 
-def _get_session_or_fail(token: str) -> tuple[SessionInfo, Scope, Config] | None:
-    scope = resolve_scope()
-    cfg = load_config(scope)
-    sweep_all(scope, cfg)
-    sessions = list_sessions(scope, cfg)
+def _get_session_or_fail(
+    token: str, cwd_filter: Path | None
+) -> tuple[SessionInfo, Config] | None:
+    cfg = load_config()
+    sweep_all(cfg)
+    sessions = list_sessions(cfg, cwd_filter=cwd_filter)
     try:
         info = resolve_one(sessions, token)
     except SelectorError as e:
         _err(str(e))
         return None
-    return info, scope, cfg
+    return info, cfg
 
 
 def cmd_cat(args) -> int:
-    res = _get_session_or_fail(args.selector)
+    res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
         return 2
-    info, _scope, cfg = res
+    info, cfg = res
     result = cat_all(info.path)
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
@@ -181,10 +177,10 @@ def cmd_cat(args) -> int:
 
 
 def cmd_tail(args) -> int:
-    res = _get_session_or_fail(args.selector)
+    res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
         return 2
-    info, scope, cfg = res
+    info, cfg = res
 
     is_since_line = args.since_line is not None
     # Mutual exclusivity is enforced by argparse.
@@ -219,7 +215,6 @@ def cmd_tail(args) -> int:
         from .follow import follow_session
 
         return follow_session(
-            scope=scope,
             cfg=cfg,
             info=info,
             initial_cursor=result.last_line,
@@ -237,10 +232,9 @@ def cmd_rm(args) -> int:
         _err("rm: missing selector (or --all-exited)")
         return 2
 
-    scope = resolve_scope()
-    cfg = load_config(scope)
-    sweep_all(scope, cfg)
-    sessions = list_sessions(scope, cfg)
+    cfg = load_config()
+    sweep_all(cfg)
+    sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
 
     targets: list[SessionInfo] = []
     any_error = False

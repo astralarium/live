@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 
-VERBS = ("run", "ls", "cat", "tail", "rm", "init", "completion")
+VERBS = ("run", "ls", "cat", "tail", "rm", "completion")
 
 
 @pytest.mark.parametrize("shell,marker", [

@@ -15,13 +15,15 @@ uv tool install astralarya-live
 ## Usage
 
 ```sh
-live init                   # create .live/ in cwd
-live run -n dev npm run dev # record under PTY, mirror to terminal
-live ls                     # list sessions
+live run -n dev npm run dev   # record under PTY, mirror to terminal
+live ls                       # list sessions started under cwd
+live ls -g                    # list all sessions
 live tail --since-line 0 dev  # resumable polling for agents
-live cat dev                # full output
-live rm dev                 # delete
+live cat dev                  # full output
+live rm dev                   # delete
 ```
+
+Sessions are stored under `~/.live/sessions/`; `live ls`/`cat`/`tail`/`rm` filter to sessions started in the current directory. Pass `-g` / `--global` to search globally.
 
 ## Shell completion
 

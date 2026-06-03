@@ -24,7 +24,8 @@ from .format import (
     stream_name,
 )
 from .lock import probe_held
-from .paths import Scope
+from .paths import sessions_dir as _sessions_dir
+from .paths import within_cwd
 
 
 @dataclass
@@ -104,12 +105,10 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
             pass
 
 
-def sweep_all(scope: Scope, cfg: Config) -> None:
-    sessions_dir = scope.sessions_dir
-    if not sessions_dir.exists():
-        return
+def sweep_all(cfg: Config) -> None:
+    sdir = _sessions_dir()
     try:
-        entries = list(os.scandir(sessions_dir))
+        entries = list(os.scandir(sdir))
     except FileNotFoundError:
         return
     for entry in entries:
@@ -196,13 +195,15 @@ def session_info(session_dir: Path, cfg: Config) -> SessionInfo | None:
     )
 
 
-def list_sessions(scope: Scope, cfg: Config) -> list[SessionInfo]:
-    sessions_dir = scope.sessions_dir
+def list_sessions(
+    cfg: Config, *, cwd_filter: Path | None = None
+) -> list[SessionInfo]:
+    """List sessions newest-first. If `cwd_filter` is set, keep only sessions
+    whose `meta.cwd` is `cwd_filter` or a descendant."""
+    sdir = _sessions_dir()
     out: list[SessionInfo] = []
-    if not sessions_dir.exists():
-        return out
     try:
-        entries = list(os.scandir(sessions_dir))
+        entries = list(os.scandir(sdir))
     except FileNotFoundError:
         return out
     for entry in entries:
@@ -212,8 +213,10 @@ def list_sessions(scope: Scope, cfg: Config) -> list[SessionInfo]:
             info = session_info(Path(entry.path), cfg)
         except FileNotFoundError:
             continue
-        if info is not None:
-            out.append(info)
-    # Newest-first by UUIDv7 lex.
+        if info is None:
+            continue
+        if cwd_filter is not None and not within_cwd(info.meta.cwd, cwd_filter):
+            continue
+        out.append(info)
     out.sort(key=lambda s: s.id, reverse=True)
     return out

@@ -1,59 +1,38 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 
-HOME_LIVE = Path.home() / ".live"
-LIVE_DIR_NAME = ".live"
 SESSIONS_SUBDIR = "sessions"
-GITIGNORE_NAME = ".gitignore"
 CONFIG_NAME = "config.json"
 
 
-@dataclass(frozen=True)
-class Scope:
-    live_dir: Path
-
-    @property
-    def sessions_dir(self) -> Path:
-        return self.live_dir / SESSIONS_SUBDIR
+def live_dir() -> Path:
+    """`~/.live`, auto-created. Re-evaluated each call so tests can set $HOME."""
+    p = Path.home() / ".live"
+    p.mkdir(mode=0o700, exist_ok=True)
+    return p
 
 
-def find_live_dir(start: Path | None = None) -> Path | None:
-    """Walk up from `start` (default: cwd) to the nearest `.live/`; None if none found."""
-    cur = (start or Path.cwd()).resolve()
-    while True:
-        candidate = cur / LIVE_DIR_NAME
-        if candidate.is_dir():
-            return candidate
-        if cur.parent == cur:
-            return None
-        cur = cur.parent
+def sessions_dir() -> Path:
+    """`~/.live/sessions/`, auto-created."""
+    p = live_dir() / SESSIONS_SUBDIR
+    p.mkdir(mode=0o700, exist_ok=True)
+    return p
 
 
-def resolve_scope(start: Path | None = None, auto_create_home: bool = True) -> Scope:
-    """Nearest walk-up `.live/`, falling back to `~/.live/` (auto-created when missing)."""
-    found = find_live_dir(start)
-    if found is not None:
-        return Scope(found)
-    if auto_create_home:
-        HOME_LIVE.mkdir(mode=0o700, exist_ok=True)
-        (HOME_LIVE / SESSIONS_SUBDIR).mkdir(mode=0o700, exist_ok=True)
-    return Scope(HOME_LIVE)
+def config_path() -> Path:
+    return live_dir() / CONFIG_NAME
 
 
-def session_dir(scope: Scope, session_id: str) -> Path:
-    return scope.sessions_dir / session_id
+def session_dir(session_id: str) -> Path:
+    return sessions_dir() / session_id
 
 
-def init_project_live_dir(cwd: Path | None = None) -> Path:
-    """Create `.live/`, `.live/sessions/`, and `.live/.gitignore`. Idempotent."""
-    root = (cwd or Path.cwd()).resolve()
-    live = root / LIVE_DIR_NAME
-    live.mkdir(mode=0o700, exist_ok=True)
-    (live / SESSIONS_SUBDIR).mkdir(mode=0o700, exist_ok=True)
-    gitignore = live / GITIGNORE_NAME
-    if not gitignore.exists():
-        gitignore.write_text(f"{SESSIONS_SUBDIR}/\n")
-    return live
+def within_cwd(session_cwd: str, cwd: Path | None = None) -> bool:
+    """True if `session_cwd` is `cwd` or a descendant (symlink-resolved)."""
+    base = (cwd or Path.cwd()).resolve()
+    try:
+        return Path(session_cwd).resolve().is_relative_to(base)
+    except (OSError, ValueError):
+        return False

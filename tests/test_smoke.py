@@ -1,4 +1,4 @@
-"""End-to-end smoke test exercising init/run/ls/cat/tail/rm."""
+"""End-to-end smoke test exercising run/ls/cat/tail/rm."""
 
 from __future__ import annotations
 
@@ -7,9 +7,6 @@ from pathlib import Path
 
 
 def test_full_cycle(project: Path, run_live) -> None:
-    assert (project / ".live" / "sessions").is_dir()
-    assert (project / ".live" / ".gitignore").is_file()
-
     proc = run_live(
         project,
         "run",

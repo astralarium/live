@@ -31,7 +31,7 @@ from .format import (
     write_meta_atomic,
 )
 from .lock import acquire_lock
-from .paths import Scope, session_dir
+from .paths import session_dir
 
 
 # ioctl constants for window size — use stdlib termios where available.
@@ -42,18 +42,16 @@ TIOCSWINSZ = getattr(termios, "TIOCSWINSZ", 0x80087467)
 class _Recorder:
     def __init__(
         self,
-        scope: Scope,
         cfg: Config,
         command: list[str],
         name: str | None,
     ):
-        self.scope = scope
         self.cfg = cfg
         self.command = command
         self.name = name
 
         self.session_id = str(uuid.uuid7())
-        self.dir: Path = session_dir(scope, self.session_id)
+        self.dir: Path = session_dir(self.session_id)
         self.meta = Meta(
             id=self.session_id,
             command=list(command),
@@ -442,12 +440,11 @@ class _Recorder:
 
 
 def record(
-    scope: Scope,
     cfg: Config,
     command: list[str],
     name: str | None = None,
 ) -> int:
     """Run `command` under live recording. Returns its exit code."""
-    rec = _Recorder(scope, cfg, command, name)
+    rec = _Recorder(cfg, command, name)
     rec.setup_session()
     return rec.run()

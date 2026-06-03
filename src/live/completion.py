@@ -27,7 +27,7 @@ _live_complete() {
     done
 
     if [ -z "$verb" ]; then
-        COMPREPLY=( $(compgen -W "run ls cat tail rm init llms.txt completion" -- "$cur") )
+        COMPREPLY=( $(compgen -W "run ls cat tail rm llms.txt completion" -- "$cur") )
         return
     fi
 
@@ -52,25 +52,25 @@ _live_complete() {
             COMPREPLY=( $(compgen -W "-n --name --" -- "$cur") )
             ;;
         ls)
-            COMPREPLY=( $(compgen -W "-a --all -n --name --json" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-a --all -g --global -n --name --json" -- "$cur") )
             ;;
         cat)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-v --verbose --strip-ansi --raw" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
             fi
             ;;
         tail)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-v --verbose -f --follow --strip-ansi --raw -n --lines -c --bytes --since-line" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes --since-line" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
             fi
             ;;
         rm)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-f --force --all-exited" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-f --force -g --global --all-exited" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
             fi
@@ -115,12 +115,14 @@ _live() {
                 ls)
                     _arguments \
                         '(-a --all)'{-a,--all} \
+                        '(-g --global)'{-g,--global} \
                         '(-n --name)'{-n+,--name=}':name:' \
                         '--json'
                     ;;
                 cat)
                     _arguments \
                         '(-v --verbose)'{-v,--verbose} \
+                        '(-g --global)'{-g,--global} \
                         '(--strip-ansi --raw)--strip-ansi' \
                         '(--strip-ansi --raw)--raw' \
                         '1:selector:_live_sessions'
@@ -129,6 +131,7 @@ _live() {
                     _arguments \
                         '(-v --verbose)'{-v,--verbose} \
                         '(-f --follow)'{-f,--follow} \
+                        '(-g --global)'{-g,--global} \
                         '(--strip-ansi --raw)--strip-ansi' \
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
@@ -139,6 +142,7 @@ _live() {
                 rm)
                     _arguments \
                         '(-f --force)'{-f,--force} \
+                        '(-g --global)'{-g,--global} \
                         '--all-exited' \
                         '*:selector:_live_sessions'
                     ;;
@@ -158,7 +162,6 @@ _live_verbs() {
         'cat:Concatenate stream.*.log for a session'
         'tail:Tail a session'
         'rm:Delete sessions'
-        'init:Create .live/ in cwd'
         'llms.txt:Print a token-minimal agent guide'
         'completion:Print shell completion script'
     )
@@ -181,7 +184,7 @@ function __live_session_names
     live ls -a --json 2>/dev/null | string match -rg '"name":"([^"]+)"' | sort -u
 end
 
-set -l verbs run ls cat tail rm init llms.txt completion
+set -l verbs run ls cat tail rm llms.txt completion
 
 complete -c live -f
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Wrap <cmd> under a PTY'
@@ -189,7 +192,6 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a ls -d 'List sess
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a cat -d 'Concatenate stream.*.log'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail a session'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a init -d 'Create .live/ in cwd'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent guide'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
 
@@ -198,17 +200,20 @@ complete -c live -n "__fish_seen_subcommand_from cat tail rm" -a "(__live_sessio
 
 # ls
 complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited sessions'
+complete -c live -n "__fish_seen_subcommand_from ls" -s g -l global -d 'Show sessions from all directories'
 complete -c live -n "__fish_seen_subcommand_from ls" -l json -d 'Emit NDJSON'
 complete -c live -n "__fish_seen_subcommand_from ls" -s n -l name -r -d 'Filter to NAME'
 
 # cat
 complete -c live -n "__fish_seen_subcommand_from cat" -s v -l verbose -d 'Add stderr metadata'
+complete -c live -n "__fish_seen_subcommand_from cat" -s g -l global -d 'Resolve selector globally'
 complete -c live -n "__fish_seen_subcommand_from cat" -l strip-ansi -d 'Remove ANSI escapes'
 complete -c live -n "__fish_seen_subcommand_from cat" -l raw -d 'Keep ANSI escapes'
 
 # tail
 complete -c live -n "__fish_seen_subcommand_from tail" -s v -l verbose
 complete -c live -n "__fish_seen_subcommand_from tail" -s f -l follow -d 'Follow new lines'
+complete -c live -n "__fish_seen_subcommand_from tail" -s g -l global -d 'Resolve selector globally'
 complete -c live -n "__fish_seen_subcommand_from tail" -l strip-ansi
 complete -c live -n "__fish_seen_subcommand_from tail" -l raw
 complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last N lines'
@@ -217,6 +222,7 @@ complete -c live -n "__fish_seen_subcommand_from tail" -l since-line -r -d 'Resu
 
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'Kill running recorders'
+complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Resolve selectors globally'
 complete -c live -n "__fish_seen_subcommand_from rm" -l all-exited -d 'Remove every dead session'
 
 # run -- hand off after first non-flag token.

@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 def _configure(project: Path, *, segment_kb: int, max_kb: int) -> None:
+    (project / ".live").mkdir(mode=0o700, exist_ok=True)
     (project / ".live" / "config.json").write_text(
         json.dumps({"segmentKb": segment_kb, "maxKb": max_kb})
     )

@@ -31,6 +31,7 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
     project: Path, live_env, run_live
 ) -> None:
     # Configure heartbeat to 1s so the hung threshold is 3s.
+    (project / ".live").mkdir(mode=0o700, exist_ok=True)
     (project / ".live" / "config.json").write_text(
         json.dumps({"heartbeatSec": 1})
     )

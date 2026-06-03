@@ -1,6 +1,6 @@
 # `live` — design
 
-Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>` under a PTY, mirrors output to the terminal, and records the bytes to disk in the nearest `.live/`. Agents read with `live cat`, `live tail`, or resumable `live tail --since-line N`, piping to `grep`/`awk` as needed.
+Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>` under a PTY, mirrors output to the terminal, and records the bytes to disk under `~/.live/`. Agents read with `live cat`, `live tail`, or resumable `live tail --since-line N`, piping to `grep`/`awk` as needed.
 
 The recorder is the sole writer per session. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
 
@@ -8,22 +8,23 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 
 ## CLI
 
-| Verb                                                                                            | Purpose                                                                                                                                                                                                                         |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-n NAME] [--] <cmd…>`                                                                | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                                                     |
-| `live ls [-n NAME] [-a] [--json]`                                                               | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                                              |
-| `live cat [-v] [--strip-ansi\|--raw] <SELECTOR>`                                                | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata. `--strip-ansi` removes ANSI escapes; `--raw` keeps them. Default: strip when stdout isn't a TTY.                                                     |
-| `live tail [-f] [-v] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `--since-line N` outputs lines after `N` for resumable polling, implies `-v`, and always strips ANSI. ANSI handling otherwise matches `cat`.            |
-| `live rm [-f] [--all-exited] <SELECTOR…>`                                                       | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.                            |
-| `live init`                                                                                     | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                                                  |
-| `live llms.txt`                                                                                 | Print a token-minimal agent guide for `live tail --since-line` polling.                                                                                                                                                         |
-| `live completion <bash\|zsh\|fish>`                                                             | Print the shell completion script.                                                                                                                                                                                              |
+| Verb                                                                                                | Purpose                                                                                                                                                                                                                         |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live run [-n NAME] [--] <cmd…>`                                                                    | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                                                     |
+| `live ls [-n NAME] [-a] [-g] [--json]`                                                              | List sessions in scope. `-a` includes exited; `-g` widens to all sessions; `--json` emits NDJSON with the full per-session field set.                                                                                          |
+| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                                               | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata. `-g` widens scope. `--strip-ansi` removes ANSI escapes; `--raw` keeps them. Default: strip when stdout isn't a TTY.                                  |
+| `live tail [-f] [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `-g` widens scope; `--since-line N` outputs lines after `N` for resumable polling, implies `-v`, and always strips ANSI. ANSI handling otherwise matches `cat`. |
+| `live rm [-f] [-g] [--all-exited] <SELECTOR…>`                                                      | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `-g` widens scope. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.        |
+| `live llms.txt`                                                                                     | Print a token-minimal agent guide for `live tail --since-line` polling.                                                                                                                                                         |
+| `live completion <bash\|zsh\|fish>`                                                                 | Print the shell completion script.                                                                                                                                                                                              |
 
 `live`, `live -h`: usage. `live <verb> -h`: per-verb help. `live --version`.
 
 ### Scope
 
-Discovery is git-style: walk up from cwd to the nearest `.live/`. That single directory is the scope for every verb — read and write alike. If walk-up reaches `/` without finding one, scope is `~/.live/` (auto-created on first use). No recursive descent, no filesystem crawl per command. To act on `~/.live/` from inside a project, `cd ~` first.
+All sessions live in `~/.live/sessions/` (auto-created on first use). Scope is a filter on `meta.cwd`.
+
+By default, read verbs (`ls`, `cat`, `tail`, `rm`) show only sessions whose recorded cwd is the current directory or a descendant. Paths are resolved through symlinks before comparison, so `/tmp/proj-link → ~/proj` matches sessions started at `~/proj`. Pass `-g` / `--global` to widen. Selectors resolve within the scoped set: a bare NAME or UUID-prefix can't reach into another project unless `-g` is given.
 
 ### Selectors
 
@@ -117,15 +118,12 @@ Pipe output from `live tail` to other tools like `grep`.
 
 ## On-disk layout
 
-Sessions live under `<root>/.live/sessions/<uuid>/`. `~/.live/` is auto-created on first use and hosts `config.json`.
-
 ```
-<project>/.live/
-  .gitignore                # written by `live init`; ignores `sessions/`
-  config.json               # optional per-project override
+~/.live/
+  config.json
   sessions/
     <uuid>/
-      meta.json             # session metadata (command, name, exit info); writer-only, replaced atomically
+      meta.json             # session metadata (command, name, cwd, exit info); writer-only, replaced atomically
       process.lock          # held by the recorder for its lifetime; presence + lock = liveness
       deadAt                # post-mortem marker; mtime = TTL clock, content = verdict
       stream.NNNN.log       # raw PTY bytes, zero-padded segment number
@@ -170,13 +168,13 @@ Readers re-list segments on every call and tolerate `ENOENT` from rotation/reten
 
 ## Configuration
 
-`~/.live/config.json` is auto-created with defaults. Any `.live/` may carry its own `config.json` to override fields. Layering: per-`.live/` over home over compiled defaults. Partial files are valid; unknown keys are ignored; out-of-range or wrong-typed fields fall back to the layer below.
+`~/.live/config.json` is auto-created with defaults. Partial files are valid; unknown keys are ignored; out-of-range or wrong-typed fields fall back to compiled defaults.
 
 ```json
 { "ttlDays": 7, "maxKb": 512, "segmentKb": 64, "heartbeatSec": 30 }
 ```
 
-Validation: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all integers. Malformed per-project config is logged and ignored; malformed home config warns and falls back to defaults.
+Validation: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all integers. Malformed config warns and falls back to defaults.
 
 ## Distribution
 
@@ -186,11 +184,12 @@ Python 3.14+. Zero runtime dependencies — PTY, flock, ioctl, signals, atomic r
 
 | Thing        | Value                                                          |
 | ------------ | -------------------------------------------------------------- |
-| Scope        | walk up from cwd to nearest `.live/`; fallback `~/.live/`      |
+| Store        | `~/.live/sessions/` (single global store)                      |
+| Scope        | cwd descendants by default; `-g` widens to all                 |
 | Capture      | PTY, merged stdout + stderr                                    |
 | TTL          | 7 days from `deadAt` mtime, dead sessions only                 |
 | Segment size | 64 KB rotation threshold; lines never split                    |
 | Retention    | 512 KB total per session; oldest segments unlinked when over   |
 | Liveness     | held flock on `process.lock`                                   |
 | Heartbeat    | active idx mtime advanced every 30 s (`heartbeatSec`)          |
-| Config       | `~/.live/config.json` plus optional per-`.live/` overrides     |
+| Config       | `~/.live/config.json`                                          |
