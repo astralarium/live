@@ -96,11 +96,10 @@ Default output: human columns — id-prefix, status, name (if set), command. `--
 
 ### `live llms.txt`
 
-Prints a snippet for users to add to their agent docs. Positional args are used as session options in the output list. The literal payload:
+Prints a snippet for users to add to their agent docs. The literal payload:
 
 ```
-This project uses `live`, a CLI streamer. The following sessions are available:
-  * [FILL IN HERE]
+This project uses `live`, a CLI streamer.
 
 List available sessions:
   live ls [-a] [--json]
