@@ -13,7 +13,7 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 | `live run [-n NAME] [--] <cmd…>`                                                                | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                                                     |
 | `live ls [-n NAME] [-a] [--json]`                                                               | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                                              |
 | `live cat [-v] [--strip-ansi\|--raw] <SELECTOR>`                                                | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata. `--strip-ansi` removes ANSI escapes; `--raw` keeps them. Default: strip when stdout isn't a TTY.                                                     |
-| `live tail [-f] [-v] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `--since-line N` outputs lines after `N` for resumable polling, implies `-v`, and defaults to `--strip-ansi`.                                          |
+| `live tail [-f] [-v] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `--since-line N` outputs lines after `N` for resumable polling, implies `-v`, and always strips ANSI. ANSI handling otherwise matches `cat`.            |
 | `live rm [-f] [--all-exited] <SELECTOR…>`                                                       | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.                            |
 | `live init`                                                                                     | Create `.live/` and `.live/sessions/` (mode `0700`) plus `.live/.gitignore` in cwd. Idempotent.                                                                                                                                 |
 | `live llms.txt`                                                                                 | Print a token-minimal agent guide for `live tail --since-line` polling.                                                                                                                                                         |
@@ -29,7 +29,7 @@ Discovery is git-style: walk up from cwd to the nearest `.live/`. That single di
 
 A selector is a single positional token, resolved like a git ref — names first, hash prefix as fallback:
 
-1. **NAME** — any in-scope session with `meta.name == token`. For `cat` / `tail`, the most recent match wins. For `rm`, every match is selected.
+1. **NAME** — any in-scope session with `meta.name == token`. For `cat` / `tail`, the most recent match wins. For `rm`, every match is selected (use a UUID prefix to target one).
 2. **UUID prefix** — fallthrough when no NAME matches. Unique match required; ambiguous → error listing candidates.
 
 No match → error. Selectors are required on `cat`, `tail`, `rm`; `rm` accepts multiple and `--all-exited` substitutes for selectors. Use `--` to pass a token starting with `-` (e.g. `live tail -- -my-session`).
@@ -71,6 +71,7 @@ Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exc
 - Caught up (`N == lastLine`): empty stdout, trailer, exit 0.
 - Cursor ahead (`N > lastLine`): see [Verbose output](#verbose-output).
 - Gap (`N + 1 < firstLine`): see [Verbose output](#verbose-output); stdout starts from the oldest retained line. Exit 0.
+- Partial line: trailing unindexed bytes appear in stdout after the last indexed line; `live: partial-line …` precedes the trailer.
 - Hung session: stdout drains whatever's newly indexed, then `live: status=hung …` appears before the trailer. The session is still alive (flock held) — polling agents can continue but should warn the user; a subsequent poll either resumes producing lines or eventually reports an exit.
 - Exited session: drained like any live session — tail emits the remaining lines, then the exit trailer (`live: exit-code=<N>` or `live: exit=inconsistent`). Polling loops can stop on that trailer.
 
