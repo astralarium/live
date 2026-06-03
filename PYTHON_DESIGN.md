@@ -1,9 +1,8 @@
 # `live` — design
 
-Stream CLI command output to agents. `live run <cmd>` wraps a command under a PTY, mirrors output to the terminal, and records the bytes to disk in the nearest `.live/`.
-Inspect command output with `live cat` and `live tail`, piping to shell tools like `grep`.
+Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>` under a PTY, mirrors output to the terminal, and records the bytes to disk in the nearest `.live/`. Agents read with `live cat`, `live tail`, or resumable `live tail --since-line N`, piping to `grep`/`awk` as needed.
 
-The recorder is the sole writer of session content. Read verbs are stateless and run lifecycle sweeps. No daemon, no broker, no persistent state.
+The recorder is the sole writer. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
 
 Python 3.14+, POSIX-only (Linux, macOS, WSL).
 
@@ -60,13 +59,13 @@ Additional stderr lines may precede the trailer, in this order when multiple app
 3. Hung (flock held, `now − lastActivity > 3 × heartbeatSec`): `live: status=hung last-activity=<ms>`.
 4. Exited (graceful): `live: exit-code=<N>`. Torn recordings (`deadAt = "inconsistent"`) emit `live: exit=inconsistent` instead. Omitted for running sessions.
 
-Errors are always printed regardless of `-v`, with the same `live: ` prefix:
+Errors are always printed regardless of `-v`, with the same `live: ` prefix.
 
-- Missing session: stderr `live: no such session: <selector>`, exit 2. No stdout, no trailer.
+Exit codes: `0` success; `1` runtime error (I/O, config, recorder failure); `2` usage error (bad flag, missing session, ambiguous selector). Session-not-found stderr: `live: no such session: <selector>`.
 
 ### `live tail --since-line`
 
-Resumable polling for agents. Outputs lines with `n > N` to stdout. `--since-line` is mutually exclusive with `-n` / `-c`, and implies `-v` (see [Verbose output](#verbose-output)).
+Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exclusive with `-n` / `-c`, implies `-v`.
 
 - Caught up (`N == lastLine`): empty stdout, trailer, exit 0.
 - Cursor ahead (`N > lastLine`): see [Verbose output](#verbose-output).
@@ -93,7 +92,7 @@ Default output: human columns — id-prefix, status, name (if set), command. `--
 
 - `id`, `command`, `cwd`, `startedAt`
 - `name?` — present iff started with `-n NAME`
-- `status` — `"running"` | `"hung"` | `"exited"` | `"inconsistent"`. `"hung"` = flock held but `now − lastActivity > 3 × heartbeatSec`. `"inconsistent"` = torn recording (from `deadAt` content).
+- `status` — `"running"` (flock held, fresh activity) | `"hung"` (flock held, `now − lastActivity > 3 × heartbeatSec`) | `"exited"` (graceful) | `"inconsistent"` (torn recording, from `deadAt` content)
 - `exitedAt?` — see [`meta.json`](#metajson) precedence
 - `exitCode?` — present on graceful exit
 - `path` — absolute session directory
