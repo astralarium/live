@@ -2,7 +2,7 @@
 
 Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>` under a PTY, mirrors output to the terminal, and records the bytes to disk in the nearest `.live/`. Agents read with `live cat`, `live tail`, or resumable `live tail --since-line N`, piping to `grep`/`awk` as needed.
 
-The recorder is the sole writer. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
+The recorder is the sole writer per session. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
 
 Python 3.14+, POSIX-only (Linux, macOS, WSL).
 
@@ -15,7 +15,7 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 | `live cat [-v] [--strip-ansi\|--raw] <SELECTOR>`                                                | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata. `--strip-ansi` removes ANSI escapes; `--raw` keeps them. Default: strip when stdout isn't a TTY.                                                     |
 | `live tail [-f] [-v] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `--since-line N` outputs lines after `N` for resumable polling, implies `-v`, and always strips ANSI. ANSI handling otherwise matches `cat`.            |
 | `live rm [-f] [--all-exited] <SELECTOR…>`                                                       | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.                            |
-| `live init`                                                                                     | Create `.live/` and `.live/sessions/` (mode `0700`) plus `.live/.gitignore` in cwd. Idempotent.                                                                                                                                 |
+| `live init`                                                                                     | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                                                  |
 | `live llms.txt`                                                                                 | Print a token-minimal agent guide for `live tail --since-line` polling.                                                                                                                                                         |
 | `live completion <bash\|zsh\|fish>`                                                             | Print the shell completion script.                                                                                                                                                                                              |
 
@@ -36,10 +36,6 @@ No match → error. Selectors are required on `cat`, `tail`, `rm`; `rm` accepts 
 
 "Most recent" = UUIDv7 lex-descending sort, top result.
 
-### `live run` argv
-
-`live run` consumes `-n NAME` / `--name=NAME`; everything from the first non-flag token (or after `--`) is the opaque wrapped command.
-
 ### Verbose output
 
 `cat` and `tail` accept `-v` / `--verbose`. With `-v`, stdout is unchanged and stderr carries metadata lines; without it, stderr is silent on success. `--since-line` implies `-v`.
@@ -54,11 +50,11 @@ live: id=<uuid> at-line=<L>
 
 Additional stderr lines may precede the trailer, in this order when multiple apply:
 
-1. Gap (`N + 1 < firstLine` because retention dropped lines, or `cat` reading a session whose oldest segment has been unlinked): `live: dropped <k> lines (since=<N>, first retained=<firstLine>)`. For `cat`, `<N>` is `0`.
-2. Cursor ahead (`tail --since-line` with `N > lastLine`, likely session swap): `live: since-line=<N> > at-line=<L>; check id`.
-3. Partial line (active stream has unindexed trailing bytes — `\r`-only progress, prompt waiting on input): `live: partial-line bytes=<k> age=<s>`. The partial bytes are emitted to stdout after the last indexed line.
-4. Hung (flock held, `now − lastActivity > 3 × heartbeatSec`): `live: status=hung last-activity=<s>`.
-5. Exited (graceful): `live: exit-code=<N>`. Torn recordings (`deadAt = "inconsistent"`) emit `live: exit=inconsistent` instead. Omitted for running sessions.
+1. Gap — retention dropped lines, or `cat` reading a session whose oldest segment has been unlinked: `live: dropped <k> lines (since=<N>, first retained=<firstLine>)`. For `cat`, `<N>` is `0`.
+2. Cursor ahead — `tail --since-line` with `N > lastLine`, likely session swap: `live: since-line=<N> > at-line=<L>; check id`.
+3. Partial line — active stream has unindexed trailing bytes (`\r`-only progress, prompt waiting on input): `live: partial-line bytes=<k> age=<s>`. The partial bytes are emitted to stdout after the last indexed line.
+4. Hung — recorder still running but quiet for too long: `live: status=hung last-activity=<s>`.
+5. Exited — graceful: `live: exit-code=<N>`. Torn recordings emit `live: exit=inconsistent` instead. Omitted for running sessions.
 
 Errors are always printed regardless of `-v`, with the same `live: ` prefix.
 
@@ -72,19 +68,12 @@ Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exc
 - Cursor ahead (`N > lastLine`): see [Verbose output](#verbose-output).
 - Gap (`N + 1 < firstLine`): see [Verbose output](#verbose-output); stdout starts from the oldest retained line. Exit 0.
 - Partial line: trailing unindexed bytes appear in stdout after the last indexed line; `live: partial-line …` precedes the trailer.
-- Hung session: stdout drains whatever's newly indexed, then `live: status=hung …` appears before the trailer. The session is still alive (flock held) — polling agents can continue but should warn the user; a subsequent poll either resumes producing lines or eventually reports an exit.
+- Hung session: stdout drains whatever's newly indexed, then `live: status=hung …` appears before the trailer. The session is still alive — polling agents can continue but should warn the user; a subsequent poll either resumes producing lines or eventually reports an exit.
 - Exited session: drained like any live session — tail emits the remaining lines, then the exit trailer (`live: exit-code=<N>` or `live: exit=inconsistent`). Polling loops can stop on that trailer.
 
 ### `live tail -f`
 
-Follow mode for humans. Emit the initial slice (`-n LINES`, `-c BYTES`, `--since-line N`, or the default last-10 lines), then watch the active `lines.*.idx` and stream each new line as it's indexed.
-
-- Event-driven, no polling: `select.kqueue` on macOS (watch the idx fd for `NOTE_WRITE | NOTE_EXTEND`), inotify on Linux/WSL via a small `ctypes` shim (`IN_MODIFY` on the idx path).
-- Rotation: on the same watch, listen for the parent dir's `NOTE_WRITE` (kqueue) / `IN_CREATE` (inotify) to detect a new `lines.NNNN+1.idx`; re-arm the watch on the new active segment.
-- On hung detection (staleness crosses `3 × heartbeatSec` with no event): emit the hung stderr line once, keep watching. A heartbeat or write clears the hung state.
-- On graceful or torn exit: drain remaining lines, emit the exit trailer, exit 0.
-- On `SIGINT` from the user's terminal: clean exit without trailer.
-- Composes with `--since-line`: starts from the cursor, then follows. (Agents should still use one-shot `--since-line` polls; `-f` holds a process open, which agents typically don't want.)
+Follow mode for humans. Emits the initial slice (`-n LINES`, `-c BYTES`, `--since-line N`, or the default last-10 lines), then streams each new line as it's indexed. Exits cleanly on graceful or torn exit; exits without a trailer on `SIGINT`. Composes with `--since-line`, though agents should prefer one-shot `--since-line` polls (`-f` holds a process open, which agents typically don't want).
 
 ### `live ls`
 
@@ -94,13 +83,12 @@ Default output: human columns — id-prefix, status, name, command. The name col
 
 - `id`, `command`, `cwd`, `startedAt`
 - `name?` — present iff started with `-n NAME`
-- `status` — `"running"` (flock held, fresh activity) | `"hung"` (flock held, `now − lastActivity > 3 × heartbeatSec`) | `"exited"` (graceful) | `"inconsistent"` (torn recording, from `deadAt` content)
-- `exitedAt?` — see [`meta.json`](#metajson) precedence
-- `exitCode?` — present on graceful exit
+- `status` — `"running"` (recorder alive, fresh activity) | `"hung"` (recorder alive, stale activity) | `"exited"` (graceful) | `"inconsistent"` (torn recording)
+- `exitedAt?`, `exitCode?` — present after the recorder dies; `exitCode` only on graceful exit
 - `path` — absolute session directory
 - `firstSegment`, `lastSegment` — both `0` for a freshly-started session
 - `firstLine`, `lastLine`, `count` — `0`/`0`/`0` until the first complete line; otherwise `count = lastLine − firstLine + 1`
-- `lastActivity` — seconds-since-epoch mtime of the active `lines.*.idx` (float)
+- `lastActivity` — seconds-since-epoch mtime of the active idx (float)
 
 ### `live llms.txt`
 
@@ -137,195 +125,62 @@ Sessions live under `<root>/.live/sessions/<uuid>/`. `~/.live/` is auto-created 
   config.json               # optional per-project override
   sessions/
     <uuid>/
-      meta.json
-      process.lock          # flock'd exclusive for the recorder's lifetime; content = recorder pid
+      meta.json             # session metadata (command, name, exit info); writer-only, replaced atomically
+      process.lock          # held by the recorder for its lifetime; presence + lock = liveness
       deadAt                # post-mortem marker; mtime = TTL clock, content = verdict
-      stream.0000.log       # raw PTY bytes
-      stream.0001.log
-      lines.0000.idx        # binary; 16-byte records, parallel to stream.NNNN.log
-      lines.0001.idx
+      stream.NNNN.log       # raw PTY bytes, zero-padded segment number
+      lines.NNNN.idx        # binary line index, one fixed-size record per complete line
 ```
 
-`stream` and `lines` are zero-padded numbered segments. The recorder appends only to the highest-numbered pair; frozen segments are immutable until retention unlinks them.
-
-### Session IDs
-
-UUIDv7 (RFC 9562) via stdlib `uuid.uuid7()`. Standard 36-char hyphenated hex; lex-monotonic = chronological.
-
-### `meta.json`
-
-```json
-{
-  "id": "0190131a-8c00-7000-8000-000000000000",
-  "command": ["uv", "run", "dev"],
-  "cwd": "/abs/path",
-  "name": "dev",
-  "startedAt": 1717200000.0,
-  "exitedAt": null,
-  "exitCode": null
-}
-```
-
-- `name` present only when started with `-n NAME`.
-- Timestamps are float seconds since epoch: `time.time()`.
-
-Writer-only. Written at session start and graceful exit. Atomic via `NamedTemporaryFile(dir=session_dir, delete=False)` + `fsync` + `os.replace` — `dir=session_dir` keeps temp and target on the same filesystem so the rename is atomic.
-
-Segment list and watermarks are derived from the filesystem:
-
-- Segments: sort `stream.NNNN.log` / `lines.NNNN.idx` filenames numerically. `firstSegment` / `lastSegment` are the min/max.
-- `firstLine` = first record's `n` in `lines.<firstSegment>.idx`.
-- `lastLine` = unpack the trailing 16 bytes of `lines.<lastSegment>.idx`; if that segment's idx is empty, walk back one segment.
-- `count` = `lastLine − firstLine + 1`.
-- No segment has any record (just-started session): `firstLine = lastLine = count = 0`.
-
-`exitedAt` precedence: `meta.exitedAt` (graceful, exact) → mtime of the active `lines.*.idx` (crash; bounded within `heartbeatSec`) → `mtime(deadAt)` (fallback).
-
-### `lines.NNNN.idx`
-
-Append-only binary, 16-byte records: `struct.pack(">Qd", n, t)` — uint64 BE line number, float64 BE timestamp (seconds since epoch).
+The recorder appends only to the highest-numbered `stream`/`lines` pair. Frozen segments are immutable until retention unlinks them. Session IDs are UUIDv7: 36-char hyphenated hex, lex-monotonic = chronological.
 
 ## Recording
 
-Goal: `live <cmd>` is transparent — keystrokes, prompts, Ctrl-C, and resize reach `<cmd>` directly.
+`live run <cmd>` is transparent — keystrokes, prompts, Ctrl-C, and resize reach `<cmd>` directly. The recorder PTY-wraps the child, mirrors its bytes to stdout, and appends them to the active stream segment. On every `\n`, it appends a record `(n, t)` to the parallel index — `n` is the absolute line number across the session's lifetime; `t` is the timestamp of the line's first byte. Trailing bytes without a newline are surfaced to readers as a "partial line" but never indexed until the newline arrives.
 
-### Startup order
+The recorder is the sole writer per session. It holds an exclusive `flock` on `process.lock` for its lifetime; that lock IS the liveness signal. Readers and sweepers probe by trying to acquire the same lock non-blocking — success means the recorder is gone.
 
-1. `mkdir(session_dir, mode=0o700)`. Session contents frequently include secrets (env vars, API keys printed by failing tools); the directory is owner-only.
-2. `open(process.lock, O_WRONLY | O_CREAT, 0o600)` and `flock(LOCK_EX | LOCK_NB)`. Liveness is claimed before any other file appears.
-3. Write the pid into `process.lock`.
-4. Create empty `stream.0000.log` and `lines.0000.idx`.
-5. Atomically write `meta.json`.
-6. `pty.fork()` and `os.execvp` in the child.
+**Prefix invariant.** The stream is always one complete line ahead of, or equal to, the index — never the other way around. A crash leaves one extra complete line in stream with no matching index record; sweepers detect this and stamp the session `inconsistent`.
 
-Readers skip any session missing `meta.json` (treat as starting). The sweep predicate skips any session whose `process.lock` doesn't exist yet (see [Sweep](#sweep)) — together these cover the steps 1–5 startup window.
+**Idle heartbeat.** The recorder advances the active idx mtime at least every `heartbeatSec`. Staleness past `3 × heartbeatSec` while the lock is still held = `hung`.
 
-### PTY and signals
+**Signals.** `SIGWINCH` propagates window size to the child PTY. `SIGTERM`/`SIGHUP` forward to the child and run the graceful-exit path. `SIGINT` is forwarded the same way only when stdin isn't a TTY — with a TTY, line discipline routes ^C to the child's pgroup directly.
 
-Child: `pty.fork()` → `os.execvp`. Parent selects on `[0, master_fd, wakeup_fd]`. If `os.isatty(0)`, stdin is put in raw mode (`tty.setraw(0)`, saved and restored on exit) and the initial PTY size is seeded with `TIOCGWINSZ` on stdin → `TIOCSWINSZ` on `master_fd`; otherwise raw mode is skipped, the PTY keeps its default 80×24, and it still works with redirected/piped stdin.
-
-- `master_fd` → write to `sys.stdout.buffer`, append to `stream.NNNN.log`, update line index.
-- stdin → write to `master_fd`. The PTY's line discipline routes ^C to the child's pgroup.
-- `wakeup_fd` (`signal.set_wakeup_fd`) delivers signals: `SIGWINCH` propagates size via `TIOCGWINSZ` / `TIOCSWINSZ`; `SIGTERM` / `SIGHUP` forward to the child and graceful-exit. `SIGINT` gets a handler only when stdin is non-TTY — with a TTY, the line discipline routes ^C to the child's pgroup and the parent never sees it; with redirected stdin, the handler forwards `SIGINT` to the child and runs the graceful-exit path.
-
-### Line indexing
-
-- On the first byte of a new line, capture `t = time.time()`.
-- On `\n`, append `struct.pack(">Qd", n, t)` to `lines.NNNN.idx`.
-- Trailing partial lines are not recorded until the newline arrives.
-
-`n` is absolute across the session's lifetime. Retention deletes segments but never renumbers.
-
-Readers may expose trailing unindexed bytes from the active stream as a "partial line" — surfaces `\r`-only progress and prompts without a trailing `\n`. See [Verbose output](#verbose-output).
-
-### Idle heartbeat
-
-The recorder advances `lines.<lastSegment>.idx`'s mtime at least every `heartbeatSec`. The select loop uses that as its timeout; on idle wake-up, `os.utime` if no write touched the file within the interval.
-
-flock detects process death; mtime staleness on the active idx detects a hung process (`status: "hung"` when `now − lastActivity > 3 × heartbeatSec`).
-
-### Write-order invariant
-
-Each line: stream byte append, then index record append. **Prefix invariant**: index records are always a prefix of complete lines in stream. A crash leaves one extra complete line in stream with no index record, never the reverse.
-
-If any `stream.*.log` or `lines.*.idx` write raises `OSError` mid-session, the recorder kills the PTY and stamps `deadAt` with `inconsistent` before exiting nonzero.
+`live run` exits with the child's exit code, or `128 + signum` if it died on a signal.
 
 ## Segments and retention
 
-Configurable per `.live/`:
+The recorder rotates segments at line boundaries when the active segment passes `segmentKb`; lines never split, so an oversize line produces a fat segment. After each rotation, if total `stream.*.log` bytes exceed `maxKb`, the recorder unlinks the lowest-numbered pair — stream first, then index, so a reader's listing never sees an orphan idx.
 
-- `segmentKb` (default 64) — rotate after a completed line carries the active segment past this.
-- `maxKb` (default 512) — total retained `stream.*.log` bytes per session.
+Line numbers (`n`) are absolute across the session's lifetime. Retention deletes but never renumbers; a reader whose cursor falls behind the oldest retained line learns about the gap via the verbose `dropped` stderr line.
 
-**Rotation.** When the active segment hits `segmentKb` at a line boundary, close it and open a new pair. Lines never split; an oversize line produces a fat segment and rotates after. Pure filesystem op — no meta write.
-
-**Reader tolerance.** Readers may briefly see one of the new pair before the other (recorder creates `stream.NNNN+1.log` then `lines.NNNN+1.idx`). Treat `ENOENT` on the highest-numbered segment's files as empty and walk back one for `lastLine`. `ENOENT` on any lower segment is a real error.
-
-**Retention.** After each rotation, sum `stream.*.log` bytes. While over `maxKb`, `os.unlink` the lowest-numbered pair — `stream.NNNN.log` first, then `lines.NNNN.idx`. Stream-first removes the pair from readers' `stream.*.log` glob atomically.
-
-**Reader race.** If retention unlinks the lowest pair between a reader's listing and its `open()`, `open()` returns `ENOENT`; readers re-list and continue from the new oldest. The next `tail --since-line` poll surfaces dropped tracked lines via the `live: dropped <k> lines …` stderr line.
+Readers re-list segments on every call and tolerate `ENOENT` from rotation/retention races.
 
 ## Liveness and cleanup
 
-**Liveness** = recorder holds an exclusive `fcntl.flock` on `process.lock`. Recorder opens with `O_WRONLY | O_CREAT`, takes `flock(LOCK_EX | LOCK_NB)`, writes its pid as decimal ASCII, never closes the fd until exit. Probes try `flock(LOCK_EX | LOCK_NB)`: `EAGAIN`/`EWOULDBLOCK` → alive, success → dead.
+**Liveness** = recorder holds `flock(process.lock)`. Recorder open + lock + write pid happens before any other file in the session directory appears, so readers and sweepers can tell "starting" from "dead" by the lock file's presence alone.
 
-### Sweep
+**Sweep** runs on every verb that touches sessions. For each dead-but-unmarked session, it creates `deadAt` (exclusive create) carrying the consistency verdict. Once `deadAt`'s mtime is older than `ttlDays × 86400 s`, the sweep deletes the session directory. Concurrent sweepers are race-safe.
 
-Runs on every `live` verb that touches sessions. Concurrent sweepers are race-safe: `O_EXCL` for `deadAt` creation, unlinks tolerate `ENOENT`. All reader and sweeper code paths tolerate the session directory itself disappearing mid-operation (`FileNotFoundError` on the dir → skip).
+`deadAt` is empty for graceful exits and contains `inconsistent` for torn recordings. Its mtime is the TTL clock — live sessions are never cleaned.
 
-```
-for each session in this .live/sessions/:
-  if process.lock missing:       # session is in startup
-      skip
-  if process.lock NOT held AND no deadAt:
-      create deadAt (O_EXCL)
-  if process.lock NOT held AND now − mtime(deadAt) > ttlDays × 86400s:
-      delete session
-```
+**Graceful exit.** On normal child exit, the recorder updates `meta.json`, creates `deadAt`, then releases the lock — in that order, so no sweep can race in and stamp a differing verdict.
 
-"NOT held" means the file exists and `flock(LOCK_EX | LOCK_NB)` on a fresh fd succeeds; close the probe fd immediately.
-
-### `deadAt` marker
-
-- **Empty file** = `consistent`. Recorder reached graceful exit.
-- **`"inconsistent\n"`** = writer was killed mid-write or hit a disk error.
-
-Graceful exit stamps `deadAt` directly. Sweepers compute the verdict by comparing complete-line count in `stream.<lastSegment>.log` against `os.path.getsize(lines.<lastSegment>.idx) // 16` (treat missing idx as 0 records — crashed mid-rotation). Equal → consistent. Any drift → inconsistent; stream-one-ahead is the expected crash shape, anything else violates the write-order invariant and is logged.
-
-`deadAt`'s mtime is the TTL clock. Live sessions are never cleaned.
-
-### Graceful exit
-
-On normal child exit: write `meta.exitedAt` and `meta.exitCode`, atomically replace meta, create an empty `deadAt`, then close the lock fd. The `deadAt`-before-unlock order is required so no sweep can race in and stamp its own (possibly differing) verdict. `SIGTERM`/`SIGHUP`/`SIGINT` route to the same path.
-
-`live run` then exits with the child's exit code: `os.WEXITSTATUS(status)` if the child exited normally, `128 + os.WTERMSIG(status)` if it died on a signal. `meta.exitCode` records the same value.
-
-### `live rm -f` on a running session
-
-1. Probe `process.lock` (open + `flock(LOCK_EX | LOCK_NB)`, then close the fd). If the probe acquired the lock, the recorder is gone (the pid in the file may have been recycled) — skip to step 5.
-2. Read the pid from `process.lock` and `SIGTERM` the recorder.
-3. Wait up to 5s for `flock` release, re-probing periodically (close each probe fd).
-4. `SIGKILL` if still alive.
-5. Unlink the session directory.
-
-Without `-f`, `rm` prints an error and continues with the next selector.
+**`live rm -f` on a running session** SIGTERMs the recorder, waits briefly for `flock` release, SIGKILLs if needed, then unlinks the directory.
 
 ## Configuration
 
-`~/.live/config.json` is auto-created with defaults:
+`~/.live/config.json` is auto-created with defaults. Any `.live/` may carry its own `config.json` to override fields. Layering: per-`.live/` over home over compiled defaults. Partial files are valid; unknown keys are ignored; out-of-range or wrong-typed fields fall back to the layer below.
 
 ```json
 { "ttlDays": 7, "maxKb": 512, "segmentKb": 64, "heartbeatSec": 30 }
 ```
 
-Any `.live/` may carry its own `config.json` to override fields. Per-field layering: per-`.live/` over home over compiled defaults. Partial files are valid.
+Validation: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all integers. Malformed per-project config is logged and ignored; malformed home config warns and falls back to defaults.
 
-Validation is a hand-rolled pass over the parsed JSON: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all integers. Unknown keys ignored; out-of-range or wrong-typed fields fall back to the layer below.
+## Distribution
 
-- Malformed per-project config: log + ignore.
-- Malformed home config: warn and fall back to defaults.
-
-## Shell completion
-
-`live <TAB>` offers verbs. `live run` consumes its own flags then defers to the wrapped command's completion. Selector verbs complete session names (`live cat <TAB>`, `live tail <TAB>`, `live rm <TAB>`).
-
-- **bash**: `complete -F _live live`; `_command_offset` after `run`'s flags.
-- **zsh**: `compdef _live live`; `_normal` for the `run` payload.
-- **fish**: `__fish_use_subcommand` for verbs; `__fish_complete_subcommand` for `run` payload.
-
-Install:
-
-```sh
-live completion bash > ~/.local/share/bash-completion/completions/live
-live completion zsh  > "${fpath[1]}/_live"
-live completion fish > ~/.config/fish/completions/live.fish
-```
-
-## Implementation
-
-Python 3.14+. `pyproject.toml` with `hatchling`, `[project.scripts] live = "live.cli:main"`. PyPI: `astralarya-live`. Install via `pipx install astralarya-live` or `uv tool install astralarya-live`.
-
-Zero runtime dependencies. PTY, flock, ioctl, signals, atomic rename, struct packing, JSON parsing, and UUIDv7 are all stdlib. `select.kqueue` covers Darwin; Linux/WSL gets inotify via an in-tree `ctypes` shim around `inotify_init1` / `inotify_add_watch` / `read`. No native build step.
+Python 3.14+. Zero runtime dependencies — PTY, flock, ioctl, signals, atomic rename, struct packing, JSON, UUIDv7, and the kqueue/inotify primitives that power `tail -f` are all stdlib. PyPI: `astralarya-live`. Install via `pipx install astralarya-live` or `uv tool install astralarya-live`.
 
 ## Defaults
 
@@ -336,7 +191,6 @@ Zero runtime dependencies. PTY, flock, ioctl, signals, atomic rename, struct pac
 | TTL          | 7 days from `deadAt` mtime, dead sessions only                 |
 | Segment size | 64 KB rotation threshold; lines never split                    |
 | Retention    | 512 KB total per session; oldest segments unlinked when over   |
-| Index format | binary, 16-byte `struct.pack(">Qd", n, t)` in `lines.NNNN.idx` |
 | Liveness     | held flock on `process.lock`                                   |
-| Heartbeat    | active `lines.*.idx` mtime advanced every 30s (`heartbeatSec`) |
+| Heartbeat    | active idx mtime advanced every 30 s (`heartbeatSec`)          |
 | Config       | `~/.live/config.json` plus optional per-`.live/` overrides     |
