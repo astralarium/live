@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "astralarya-live"
+version = "0.1.0"
+description = "Stream long-lived command output to coding agents."
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "MIT" }
+authors = [{ name = "astralarya" }]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.scripts]
+live = "live.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/astralarya/live"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/live"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
