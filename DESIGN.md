@@ -1,6 +1,6 @@
 # `live` — design
 
-Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>` under a PTY, mirrors output to the terminal, and records the bytes to disk under `~/.live/`. Agents read with `live cat`, `live tail`, or resumable `live tail --since N`, piping to `grep`/`awk` as needed.
+Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>` under a PTY, mirrors output to the terminal, and records the bytes to disk under `~/.live/`. Agents read with `live cat`, `live tail`, or resumable `live tail -n +N`, piping to `grep`/`awk` as needed.
 
 The recorder is the sole writer per session. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
 
@@ -8,15 +8,15 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 
 ## CLI
 
-| Verb                                                                                                | Purpose                                                                                                                                                                                                                         |
-| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-n NAME] [--] <cmd…>`                                                                    | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                                                     |
-| `live ls [-n NAME] [-a] [-g] [--json]`                                                              | List sessions in scope. `-a` includes exited; `-g` widens to all sessions; `--json` emits NDJSON with the full per-session field set.                                                                                          |
-| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                                               | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata. `-g` widens scope. `--strip-ansi` removes ANSI escapes; `--raw` keeps them. Default: strip when stdout isn't a TTY.                                  |
-| `live tail [-f] [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `-f` follows new lines until exit; `-g` widens scope; `--since N` outputs lines after `N` for resumable polling, implies `-v`, and always strips ANSI. ANSI handling otherwise matches `cat`. |
-| `live rm [-f] [-g] [--all-exited] <SELECTOR…>`                                                      | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `-g` widens scope. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.        |
-| `live llms.txt`                                                                                     | Print a token-minimal agent guide for `live tail --since` polling.                                                                                                                                                         |
-| `live completion <bash\|zsh\|fish>`                                                                 | Print the shell completion script.                                                                                                                                                                                              |
+| Verb                                                                                            | Purpose                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live run [-n NAME] [--] <cmd…>`                                                                | Run `<cmd>` in a PTY, mirror to stdout, record to disk.                                                                                                                                                                                                                                                                           |
+| `live ls [-a] [-g] [--json] [SELECTOR]`                                                         | List sessions in working directory (or below). Optional `SELECTOR` filters by NAME or UUID-prefix. `-a` include exited; `-g` global directory scope; `--json` emit NDJSON with full session data.                                                                                                                                 |
+| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                                           | Concatenate session. `-v` verbose output (for agents); `-g` global directory scope; `--strip-ansi` remove ANSI escapes; `--raw` keep them. Default: strip when stdout isn't a TTY.                                                                                                                                                |
+| `live tail [-f] [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since T] <SELECTOR>` | Tail session. Unix `tail` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-f` follow new lines until exit; `-n N` last N lines, `-n +N` lines with `n > N` (resumable polling); `-c K` last K bytes; `--since T` lines with index timestamp `> T` (epoch seconds); ANSI handling matches `cat`. |
+| `live rm [-f] [-g] [--all-exited] <SELECTOR…>`                                                  | Delete sessions. `-f` SIGTERMs live runs and ignore nonexistent; `-g` global directory scope; `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.                                                                                                          |
+| `live llms.txt`                                                                                 | Print token-minimal agent guide for `live tail -vn +N` polling.                                                                                                                                                                                                                                                                   |
+| `live completion <bash\|zsh\|fish>`                                                             | Print shell completion script.                                                                                                                                                                                                                                                                                                    |
 
 `live`, `live -h`: usage. `live <verb> -h`: per-verb help. `live --version`.
 
@@ -39,20 +39,20 @@ No match → error. Selectors are required on `cat`, `tail`, `rm`; `rm` accepts 
 
 ### Verbose output
 
-`cat` and `tail` accept `-v` / `--verbose`. With `-v`, stdout is unchanged and stderr carries metadata lines; without it, stderr is silent on success. `--since` implies `-v`.
+`cat` and `tail` accept `-v` / `--verbose`. With `-v`, stdout is unchanged and stderr carries metadata lines; without it, stderr is silent on success. Agents using `-n +N` for resumable polling will typically want `-v` to read the trailer cursor.
 
 All verbose lines are prefixed `live: `. The trailing line of any verbose read is the identity/cursor stamp:
 
 ```
-live: id=<uuid> at-line=<L>
+live: id=<uuid> at-line=<L> at-time=<T>
 ```
 
-`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed. Agents using `--since` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change.
+`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed; `<T>` is the active stream segment's mtime (float seconds since epoch) — the wall-clock time of the most recent byte written. Heartbeats touch only the idx file, never the stream, so `<T>` reflects real write activity (partial-line bytes included). Agents using `-n +N` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change. `<T>` is informational for `-n +N` agents and may also be passed to `--since T` for time-range follow-ups.
 
 Additional stderr lines may precede the trailer, in this order when multiple apply:
 
 1. Gap — retention dropped lines, or `cat` reading a session whose oldest segment has been unlinked: `live: dropped <k> lines (since=<N>, first retained=<firstLine>)`. For `cat`, `<N>` is `0`.
-2. Cursor ahead — `tail --since` with `N > lastLine`, likely session swap: `live: since=<N> > at-line=<L>; check id`.
+2. Cursor ahead — `tail -n +N` with `N > lastLine`, or `tail --since T` with `T > at-time`; likely session swap: `live: since=<N> > at-line=<L>; check id` or `live: since=<T> > at-time=<at-time>; check id`.
 3. Partial line — active stream has unindexed trailing bytes (`\r`-only progress, prompt waiting on input): `live: partial-line bytes=<k> age=<s>`. The partial bytes are emitted to stdout after the last indexed line.
 4. Hung — recorder still running but quiet for too long: `live: status=hung last-activity=<s>`.
 5. Exited — graceful: `live: exit-code=<N>`. Torn recordings emit `live: exit=inconsistent` instead. Omitted for running sessions.
@@ -61,9 +61,9 @@ Errors are always printed regardless of `-v`, with the same `live: ` prefix.
 
 Exit codes: `0` success; `1` runtime error (I/O, config, recorder failure); `2` usage error (bad flag, missing session, ambiguous selector). Session-not-found stderr: `live: no such session: <selector>`.
 
-### `live tail --since`
+### `live tail -n +N`
 
-Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exclusive with `-n` / `-c`, implies `-v`.
+Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exclusive with `-c` / `--since`. Pass `-v` for the trailer cursor (`live: id=… at-line=… at-time=…`) — agents need this to resume.
 
 - Caught up (`N == lastLine`): empty stdout, trailer, exit 0.
 - Cursor ahead (`N > lastLine`): see [Verbose output](#verbose-output).
@@ -72,13 +72,17 @@ Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exc
 - Hung session: stdout drains whatever's newly indexed, then `live: status=hung …` appears before the trailer. The session is still alive — polling agents can continue but should warn the user; a subsequent poll either resumes producing lines or eventually reports an exit.
 - Exited session: drained like any live session — tail emits the remaining lines, then the exit trailer (`live: exit-code=<N>` or `live: exit=inconsistent`). Polling loops can stop on that trailer.
 
+### `live tail --since`
+
+Time-range filter. Outputs lines whose recorded idx timestamp `t > T` (epoch seconds, float). Includes the partial-line tail if the active stream's mtime is also `> T`. Mutually exclusive with `-n` / `-c`. Pass `-v` for the trailer. Useful for "show me everything since <wall-clock time>" queries; not bit-exact for line-by-line resume (use `-n +N` for that — a partial completing between polls can land an idx `t` slightly before the previous trailer's `at-time`).
+
 ### `live tail -f`
 
-Follow mode for humans. Emits the initial slice (`-n LINES`, `-c BYTES`, `--since N`, or the default last-10 lines), then streams each new line as it's indexed. Exits cleanly on graceful or torn exit; exits without a trailer on `SIGINT`. Composes with `--since`, though agents should prefer one-shot `--since` polls (`-f` holds a process open, which agents typically don't want).
+Follow mode for humans. Emits the initial slice (`-n LINES`, `-n +N`, `-c BYTES`, `--since T`, or the default last-10 lines), then streams each new line as it's indexed. Exits cleanly on graceful or torn exit; exits without a trailer on `SIGINT`. Composes with `-n +N`, though agents should prefer one-shot `-n +N` polls (`-f` holds a process open, which agents typically don't want).
 
 ### `live ls`
 
-Lists sessions in scope, newest-first (UUIDv7 lex desc). Running only by default; `-a` / `--all` includes exited. `-n NAME` filters to that label.
+Lists sessions in scope, newest-first (UUIDv7 lex desc). Running only by default; `-a` / `--all` includes exited. An optional positional `SELECTOR` filters by NAME (every match) or UUID-prefix (every prefix match); no match yields an empty result, not an error.
 
 Default output: human columns — id-prefix, status, name, command. The name column is always rendered; sessions started without `-n NAME` show `-`. `--json` emits NDJSON, one object per session, with the full field set:
 
@@ -99,19 +103,23 @@ Prints a snippet for users to add to their agent docs. The literal payload:
 This project uses `live`, a CLI streamer.
 
 List available sessions:
-  live ls [-a] [--json]
+  live ls [-a] [--json] [<SELECTOR>]
 
 Read output from a live session:
-  live tail --since N <SELECTOR>
-    stdout:  lines with n>N
-    trailer: live: id=<uuid> at-line=<L>
-    resume:  next N = <L>; reset N=0 if <uuid> changes
-    stop:    stderr has "live: exit-code=" or "live: exit=inconsistent"
-    hung:    stderr "live: status=hung last-activity=<s>" (still alive, just stalled)
-    gap:     stderr "live: dropped <k> lines (since=<N>, first retained=<F>)"
-    partial: stderr "live: partial-line bytes=<k> age=<s>"
+  live tail -vn +<N> <SELECTOR>
 
-  SELECTOR: UUID prefix or NAME (newest match)
+<N>: line number to continue
+<SELECTOR>: UUID prefix or NAME (newest match)
+
+stdout: command stdout+stderr lines with n>N
+stderr: live verbose output
+  trailer: "live: id=<uuid> at-line=<L> at-time=<T>"
+  stop:    "live: exit-code=" or "live: exit=inconsistent"
+  hung:    "live: status=hung last-activity=<s>" (still alive, just stalled)
+  gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
+  partial: "live: partial-line bytes=<k> age=<s>"
+
+To resume reading: next <N> = <L>; reset <N>=0 if <uuid> changes
 
 Pipe output from `live tail` to other tools like `grep`.
 ```
@@ -182,14 +190,14 @@ Python 3.14+. Zero runtime dependencies — PTY, flock, ioctl, signals, atomic r
 
 ## Defaults
 
-| Thing        | Value                                                          |
-| ------------ | -------------------------------------------------------------- |
-| Store        | `~/.live/sessions/` (single global store)                      |
-| Scope        | cwd descendants by default; `-g` widens to all                 |
-| Capture      | PTY, merged stdout + stderr                                    |
-| TTL          | 7 days from `deadAt` mtime, dead sessions only                 |
-| Segment size | 64 KB rotation threshold; lines never split                    |
-| Retention    | 512 KB total per session; oldest segments unlinked when over   |
-| Liveness     | held flock on `process.lock`                                   |
-| Heartbeat    | active idx mtime advanced every 30 s (`heartbeatSec`)          |
-| Config       | `~/.live/config.json`                                          |
+| Thing        | Value                                                        |
+| ------------ | ------------------------------------------------------------ |
+| Store        | `~/.live/sessions/` (single global store)                    |
+| Scope        | cwd descendants by default; `-g` widens to all               |
+| Capture      | PTY, merged stdout + stderr                                  |
+| TTL          | 7 days from `deadAt` mtime, dead sessions only               |
+| Segment size | 64 KB rotation threshold; lines never split                  |
+| Retention    | 512 KB total per session; oldest segments unlinked when over |
+| Liveness     | held flock on `process.lock`                                 |
+| Heartbeat    | active idx mtime advanced every 30 s (`heartbeatSec`)        |
+| Config       | `~/.live/config.json`                                        |

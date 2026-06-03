@@ -52,7 +52,11 @@ _live_complete() {
             COMPREPLY=( $(compgen -W "-n --name --" -- "$cur") )
             ;;
         ls)
-            COMPREPLY=( $(compgen -W "-a --all -g --global -n --name --json" -- "$cur") )
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "-a --all -g --global --json" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
+            fi
             ;;
         cat)
             if [[ "$cur" == -* ]]; then
@@ -116,8 +120,8 @@ _live() {
                     _arguments \
                         '(-a --all)'{-a,--all} \
                         '(-g --global)'{-g,--global} \
-                        '(-n --name)'{-n+,--name=}':name:' \
-                        '--json'
+                        '--json' \
+                        '1:selector:_live_sessions'
                     ;;
                 cat)
                     _arguments \
@@ -136,7 +140,7 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
-                        '--since=:cursor:' \
+                        '--since=:epoch-seconds:' \
                         '1:selector:_live_sessions'
                     ;;
                 rm)
@@ -195,14 +199,13 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete se
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent guide'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
 
-# Selector completion for cat / tail / rm.
-complete -c live -n "__fish_seen_subcommand_from cat tail rm" -a "(__live_session_names)"
+# Selector completion for ls / cat / tail / rm.
+complete -c live -n "__fish_seen_subcommand_from ls cat tail rm" -a "(__live_session_names)"
 
 # ls
 complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited sessions'
 complete -c live -n "__fish_seen_subcommand_from ls" -s g -l global -d 'Show sessions from all directories'
 complete -c live -n "__fish_seen_subcommand_from ls" -l json -d 'Emit NDJSON'
-complete -c live -n "__fish_seen_subcommand_from ls" -s n -l name -r -d 'Filter to NAME'
 
 # cat
 complete -c live -n "__fish_seen_subcommand_from cat" -s v -l verbose -d 'Add stderr metadata'
@@ -218,7 +221,7 @@ complete -c live -n "__fish_seen_subcommand_from tail" -l strip-ansi
 complete -c live -n "__fish_seen_subcommand_from tail" -l raw
 complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last N lines'
 complete -c live -n "__fish_seen_subcommand_from tail" -s c -l bytes -r -d 'Last K bytes'
-complete -c live -n "__fish_seen_subcommand_from tail" -l since -r -d 'Resumable cursor'
+complete -c live -n "__fish_seen_subcommand_from tail" -l since -r -d 'Time cursor (epoch seconds)'
 
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'Kill running recorders'

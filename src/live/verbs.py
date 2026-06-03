@@ -16,6 +16,7 @@ from .reader import (
     ReadResult,
     cat_all,
     lines_since,
+    lines_since_time,
     should_strip_ansi,
     strip_ansi,
     tail_last,
@@ -23,7 +24,6 @@ from .reader import (
 from .recorder import record
 from .select_session import SelectorError, resolve_many, resolve_one
 from .sweep import SessionInfo, list_sessions, sweep_all
-
 
 # ----- error helpers -----
 
@@ -73,7 +73,10 @@ def _emit_read_result(
             print(f"live: exit-code={info.exit_code}", file=sys.stderr)
     elif info.status == "inconsistent":
         print("live: exit=inconsistent", file=sys.stderr)
-    print(f"live: id={info.id} at-line={result.last_line}", file=sys.stderr)
+    print(
+        f"live: id={info.id} at-line={result.last_line} at-time={result.at_time:.3f}",
+        file=sys.stderr,
+    )
 
 
 # ----- verbs -----
@@ -103,8 +106,13 @@ def cmd_ls(args) -> int:
     sweep_all(cfg)
     sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
 
-    if args.name:
-        sessions = [s for s in sessions if s.meta.name == args.name]
+    if args.selector:
+        token = args.selector
+        name_matches = [s for s in sessions if s.meta.name == token]
+        if name_matches:
+            sessions = name_matches
+        else:
+            sessions = [s for s in sessions if s.id.startswith(token)]
 
     if not args.all:
         sessions = [s for s in sessions if s.status in ("running", "hung")]
@@ -169,7 +177,6 @@ def cmd_cat(args) -> int:
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
-        is_since=False,
         stdout_is_tty=sys.stdout.isatty(),
     )
     _emit_read_result(result, info, cfg, verbose=args.verbose, strip=strip)
@@ -182,25 +189,39 @@ def cmd_tail(args) -> int:
         return 2
     info, cfg = res
 
-    is_since = args.since is not None
-    # Mutual exclusivity is enforced by argparse.
+    # args.lines is None or a (kind, int) tuple from _lines_arg.
+    since_n: int | None = None
+    n_lines: int | None = None
+    if args.lines is not None:
+        kind, n = args.lines
+        if kind == "since":
+            since_n = n
+        else:
+            n_lines = n
 
-    if is_since:
-        verbose = True  # implied
-        result = lines_since(info.path, since=args.since)
-        # Cursor-ahead message (N > lastLine).
-        if args.since > result.last_line and result.last_line:
+    is_line_cursor = since_n is not None
+    is_time_cursor = args.since is not None
+    # Mutual exclusivity (-n / -c / --since) is enforced by argparse.
+
+    verbose = args.verbose
+    if is_line_cursor:
+        result = lines_since(info.path, since=since_n)
+        if since_n > result.last_line and result.last_line:
             result.stderr_lines.append(
-                f"since={args.since} > at-line={result.last_line}; check id"
+                f"since={since_n} > at-line={result.last_line}; check id"
+            )
+    elif is_time_cursor:
+        result = lines_since_time(info.path, since_t=args.since)
+        if args.since > result.at_time and result.at_time:
+            result.stderr_lines.append(
+                f"since={args.since:.3f} > at-time={result.at_time:.3f}; check id"
             )
     else:
-        verbose = args.verbose
-        result = tail_last(info.path, n_lines=args.lines, c_bytes=args.bytes_)
+        result = tail_last(info.path, n_lines=n_lines, c_bytes=args.bytes_)
 
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
-        is_since=is_since,
         stdout_is_tty=sys.stdout.isatty(),
     )
 
@@ -240,9 +261,7 @@ def cmd_rm(args) -> int:
     any_error = False
 
     if args.all_exited:
-        targets.extend(
-            [s for s in sessions if s.status in ("exited", "inconsistent")]
-        )
+        targets.extend([s for s in sessions if s.status in ("exited", "inconsistent")])
 
     for token in args.selectors or []:
         try:
@@ -298,19 +317,23 @@ LLMS_TXT_PAYLOAD = """\
 This project uses `live`, a CLI streamer.
 
 List available sessions:
-  live ls [-a] [--json]
+  live ls [-a] [--json] [<SELECTOR>]
 
 Read output from a live session:
-  live tail --since N <SELECTOR>
-    stdout:  lines with n>N
-    trailer: live: id=<uuid> at-line=<L>
-    resume:  next N = <L>; reset N=0 if <uuid> changes
-    stop:    stderr has "live: exit-code=" or "live: exit=inconsistent"
-    hung:    stderr "live: status=hung last-activity=<s>" (still alive, just stalled)
-    gap:     stderr "live: dropped <k> lines (since=<N>, first retained=<F>)"
-    partial: stderr "live: partial-line bytes=<k> age=<s>"
+  live tail -vn +<N> <SELECTOR>
 
-  SELECTOR: UUID prefix or NAME (newest match)
+<N>: line number to continue
+<SELECTOR>: UUID prefix or NAME (newest match)
+
+stdout: command stdout+stderr lines with n>N
+stderr: live verbose output
+  trailer: "live: id=<uuid> at-line=<L> at-time=<T>"
+  stop:    "live: exit-code=" or "live: exit=inconsistent"
+  hung:    "live: status=hung last-activity=<s>" (still alive, just stalled)
+  gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
+  partial: "live: partial-line bytes=<k> age=<s>"
+
+To resume reading: next <N> = <L>; reset <N>=0 if <uuid> changes
 
 Pipe output from `live tail` to other tools like `grep`.
 """

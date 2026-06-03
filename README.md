@@ -18,7 +18,7 @@ uv tool install astralarya-live
 live run -n dev npm run dev   # record under PTY, mirror to terminal
 live ls                       # list sessions started under cwd
 live ls -g                    # list all sessions
-live tail --since 0 dev  # resumable polling for agents
+live tail -vn +0 dev          # resumable polling for agents
 live cat dev                  # full output
 live rm dev                   # delete
 ```
@@ -44,4 +44,3 @@ live completion fish > ~/.config/fish/completions/live.fish
 Completes verbs, per-verb flags, and session names (via `live ls -a --json`).
 After `live run`, completion hands off to the wrapped command's own completion —
 so `live run git che<TAB>` becomes `live run git checkout`.
-

@@ -58,7 +58,7 @@ def test_partial_line_surfaces_in_tail(project: Path, live_env, run_live) -> Non
 
         assert _wait_for(has_partial, timeout=8.0), "partial state never appeared"
 
-        poll = run_live(project, "tail", "--since", "0", "prompt")
+        poll = run_live(project, "tail", "-vn", "+0", "prompt")
         # stdout should include both the indexed line and the partial prompt bytes.
         out = poll.stdout.replace("\r", "")
         assert "first complete line" in out

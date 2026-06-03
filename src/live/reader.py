@@ -40,15 +40,16 @@ def should_strip_ansi(
     *,
     explicit_strip: bool,
     explicit_raw: bool,
-    is_since: bool,
     stdout_is_tty: bool,
 ) -> bool:
-    """Resolve --strip-ansi/--raw/default-by-TTY rules."""
+    """Resolve --strip-ansi/--raw/default-by-TTY rules.
+
+    Default: strip when stdout isn't a TTY (agent pipes get plain text; humans
+    in a terminal get colors). Explicit flags override.
+    """
     if explicit_raw:
         return False
     if explicit_strip:
-        return True
-    if is_since:
         return True
     return not stdout_is_tty
 
@@ -119,11 +120,28 @@ class ReadResult:
     stderr_lines: list[str]
     first_line: int  # first n actually emitted (0 if none)
     last_line: int  # cursor for the trailer (lastLine at read completion)
+    at_time: float  # wall-clock time of last write (active stream mtime); 0.0 if no segment
     dropped: int  # k lines dropped (gap)
     first_retained: int  # firstLine of session at read time
     partial_bytes: int  # k bytes in partial-line tail
     partial_age: float  # age of partial line in seconds (0.0 if none)
     partial_seg: int | None  # segment number carrying the partial (None if no partial)
+
+
+def at_time_of(session_dir: Path) -> float:
+    """Wall-clock time of the most recent byte written to the active stream
+    segment. Returns 0.0 if no segment exists. The active stream is never
+    touched by the recorder's idle heartbeat, so this reflects real writes
+    only — partial-line bytes included."""
+    from .format import list_segments, stream_name
+
+    segs = list_segments(session_dir)
+    if not segs:
+        return 0.0
+    try:
+        return os.path.getmtime(session_dir / stream_name(segs[-1]))
+    except FileNotFoundError:
+        return 0.0
 
 
 def lines_since(
@@ -134,7 +152,7 @@ def lines_since(
     """Read lines with n > since. Includes any partial-line tail in stdout."""
     refs = segment_refs(session_dir)
     if not refs:
-        return ReadResult(b"", [], 0, 0, 0, 0, 0, 0.0, None)
+        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0.0, None)
 
     # Compute firstLine/lastLine, decide gap.
     first_line = 0
@@ -184,22 +202,22 @@ def lines_since(
     partial_bytes = 0
     partial_age = 0.0
     partial_seg: int | None = None
+    at_time = 0.0
     if refs:
         last_ref = refs[-1]
+        try:
+            at_time = os.path.getmtime(last_ref.stream_path)
+        except FileNotFoundError:
+            at_time = 0.0
         records = read_idx_records(last_ref.idx_path)
         stream = stream_segment_bytes(last_ref.stream_path)
         tail = partial_tail_bytes(stream, records)
         if tail:
             partial_bytes = len(tail)
             partial_seg = last_ref.seg
-            # Estimate age from active idx mtime (heartbeat keeps it fresh,
-            # but on partial-only activity the mtime equals last-completed-line time).
-            try:
-                partial_age = max(
-                    0.0, time.time() - os.path.getmtime(last_ref.idx_path)
-                )
-            except FileNotFoundError:
-                partial_age = 0.0
+            # Age from active stream mtime — heartbeats only touch the idx,
+            # so stream mtime is the time of the latest real byte write.
+            partial_age = max(0.0, time.time() - at_time)
             out.extend(tail)
 
     return ReadResult(
@@ -207,6 +225,7 @@ def lines_since(
         stderr_lines=stderr_lines,
         first_line=emit_from,
         last_line=last_line,
+        at_time=at_time,
         dropped=dropped,
         first_retained=first_line,
         partial_bytes=partial_bytes,
@@ -218,6 +237,72 @@ def lines_since(
 def cat_all(session_dir: Path) -> ReadResult:
     """Concatenate every stream segment + partial tail."""
     return lines_since(session_dir, since=0)
+
+
+def lines_since_time(session_dir: Path, *, since_t: float) -> ReadResult:
+    """Read lines whose idx timestamp `t > since_t`. Includes partial-line tail."""
+    refs = segment_refs(session_dir)
+    if not refs:
+        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0.0, None)
+
+    first_line = 0
+    for ref in refs:
+        rec = first_idx_record(ref.idx_path)
+        if rec is not None:
+            first_line = rec[0]
+            break
+    last_line = 0
+    for ref in reversed(refs):
+        rec = last_idx_record(ref.idx_path)
+        if rec is not None:
+            last_line = rec[0]
+            break
+
+    out = bytearray()
+    for ref in refs:
+        records = read_idx_records(ref.idx_path)
+        if not records:
+            continue
+        # Skip whole segment if its newest record is before the cursor.
+        if records[-1][1] <= since_t:
+            continue
+        stream = stream_segment_bytes(ref.stream_path)
+        lines = lines_in_segment(stream, records)
+        for rec_idx, (_n, t) in enumerate(records):
+            if t <= since_t or rec_idx >= len(lines):
+                continue
+            out.extend(lines[rec_idx])
+
+    partial_bytes = 0
+    partial_age = 0.0
+    partial_seg: int | None = None
+    at_time = 0.0
+    last_ref = refs[-1]
+    try:
+        at_time = os.path.getmtime(last_ref.stream_path)
+    except FileNotFoundError:
+        at_time = 0.0
+    records = read_idx_records(last_ref.idx_path)
+    stream = stream_segment_bytes(last_ref.stream_path)
+    tail = partial_tail_bytes(stream, records)
+    if tail and at_time > since_t:
+        partial_bytes = len(tail)
+        partial_seg = last_ref.seg
+        partial_age = max(0.0, time.time() - at_time)
+        out.extend(tail)
+
+    return ReadResult(
+        stdout=bytes(out),
+        stderr_lines=[],
+        first_line=0,
+        last_line=last_line,
+        at_time=at_time,
+        dropped=0,
+        first_retained=first_line,
+        partial_bytes=partial_bytes,
+        partial_age=partial_age,
+        partial_seg=partial_seg,
+    )
 
 
 def tail_last(
@@ -258,6 +343,7 @@ def tail_last(
         last_line=result.last_line,
         dropped=result.dropped,
         first_retained=result.first_retained,
+        at_time=result.at_time,
         partial_bytes=result.partial_bytes,
         partial_age=result.partial_age,
         partial_seg=result.partial_seg,

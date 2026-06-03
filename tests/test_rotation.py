@@ -76,6 +76,6 @@ def test_since_after_retention_reports_gap(project: Path, run_live) -> None:
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
-    poll = run_live(project, "tail", "--since", "0", "spam")
+    poll = run_live(project, "tail", "-vn", "+0", "spam")
     assert "dropped" in poll.stderr
     assert "first retained=" in poll.stderr
