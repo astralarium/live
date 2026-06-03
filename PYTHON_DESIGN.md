@@ -9,15 +9,16 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 
 ## CLI
 
-| Verb                                                                 | Purpose                                                                                                                                                                                              |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-n NAME] [--] <cmd…>`                                     | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                          |
-| `live ls [-g] [-n NAME] [-a] [--json]`                               | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                   |
-| `live cat [-g] [-v] <SELECTOR>`                                           | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata.                                                                                                                       |
-| `live tail [-g] [-v] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `--since-line N` outputs lines after `N` for resumable polling and implies `-v`.                                                                             |
-| `live rm [-g] [-f] [--all-exited] <SELECTOR…>`                       | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed. |
-| `live init`                                                          | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                       |
-| `live completion <bash\|zsh\|fish>`                                  | Print the shell completion script.                                                                                                                                                                   |
+| Verb                                                                      | Purpose                                                                                                                                                                                              |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live run [-n NAME] [--] <cmd…>`                                          | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                          |
+| `live ls [-g] [-n NAME] [-a] [--json]`                                    | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                   |
+| `live cat [-g] [-v] <SELECTOR>`                                           | Concatenate all `stream.*.log` for the session. `-v` adds stderr metadata.                                                                                                                           |
+| `live tail [-g] [-v] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `--since-line N` outputs lines after `N` for resumable polling and implies `-v`.                                                                                 |
+| `live rm [-g] [-f] [--all-exited] <SELECTOR…>`                            | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed. |
+| `live init`                                                               | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                       |
+| `live llms.txt`                                                           | Print a token-minimal agent guide for `live tail --since-line` polling.                                                                                                                              |
+| `live completion <bash\|zsh\|fish>`                                       | Print the shell completion script.                                                                                                                                                                   |
 
 `live`, `live -h`: usage. `live <verb> -h`: per-verb help. `live --version`.
 
@@ -33,12 +34,12 @@ Walker rules: don't descend into `node_modules`, dotdirs other than `.live/`, or
 
 ### Selectors
 
-A session selector is one of:
+A selector is a single positional token, resolved like a git ref — names first, hash prefix as fallback:
 
-- **`--name NAME`** — sessions whose `meta.name` equals `NAME`. For `cat`/`tail`, resolves to the most recent match. For `rm`, resolves to every match. (No `-n`; `tail -n` is line count.)
-- **Positional UUID-or-prefix** — unique match required; ambiguous → error listing candidates.
+1. **NAME** — any in-scope session with `meta.name == token`. For `cat` / `tail`, the most recent match wins. For `rm`, every match is selected.
+2. **UUID prefix** — fallthrough when no NAME matches. Unique match required; ambiguous → error listing candidates.
 
-Selectors are required on `cat`, `tail`, `rm`. `rm` accepts multiple (Unix `rm` semantics); `--all-exited` substitutes for selectors on `rm`.
+No match → error. Selectors are required on `cat`, `tail`, `rm`; `rm` accepts multiple and `--all-exited` substitutes for selectors. Use `--` to pass a token starting with `-` (e.g. `live tail -- -my-session`).
 
 "Most recent" = UUIDv7 lex-descending sort, top result.
 
@@ -56,7 +57,7 @@ All verbose lines are prefixed `live: `. The trailing line of any verbose read i
 live: id=<uuid> at-line=<L>
 ```
 
-`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed. Agents using `--since-line` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a `--name` selector drifting to a new session — reset the cursor to `0` on UUID change.
+`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed. Agents using `--since-line` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change.
 
 Additional stderr lines may precede the trailer:
 
@@ -92,6 +93,30 @@ Default output: human columns — id-prefix, status, name (if set), command. `--
 - `firstSegment`, `lastSegment`
 - `firstLine`, `lastLine`, `count`
 - `lastActivity` — ms-since-epoch mtime of the active `lines.*.idx`
+
+### `live llms.txt`
+
+Prints a snippet for users to add to their agent docs. Positional args are used as session options in the output list. The literal payload:
+
+```
+This project uses `live`, a CLI streamer. The following sessions are available:
+  * [FILL IN HERE]
+
+Read output from a live session:
+  live tail --since-line N <SELECTOR>
+    stdout: lines with n>N
+    stderr trailer: live: id=<uuid> at-line=<L>
+    resume: next N = <L>; reset N=0 if <uuid> changes
+    stop:   stderr has "live: exit-code=" or "live: exit=inconsistent"
+    gap:    stderr "live: dropped <k> lines (since=<N>, first retained=<F>)"
+
+  SELECTOR: UUID prefix or NAME (newest match)
+
+Pipe output from `live tail` to other tools like `grep`.
+
+List available sessions:
+  live ls [-a] [--json]
+```
 
 ## On-disk layout
 
@@ -275,15 +300,15 @@ Zero runtime dependencies. PTY, flock, ioctl, signals, atomic rename, struct pac
 
 ## Defaults
 
-| Thing               | Value                                                                                                                                              |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read scope          | walk up from cwd to nearest `.live/`, recursive `os.scandir` from its parent; fallback `~/.live/`; `-g` (reads only) recurses from `~`             |
-| Write scope (`run`) | nearest `.live/` walking up from cwd; fallback `~/.live/`                                                                                          |
-| Capture             | PTY, merged stdout + stderr                                                                                                                        |
-| TTL                 | 7 days from `deadAt` mtime, dead sessions only                                                                                                     |
-| Segment size        | 64 KB rotation threshold; lines never split                                                                                                        |
-| Retention           | 512 KB total per session; oldest segments unlinked when over                                                                                       |
-| Index format        | binary, 16-byte `struct.pack(">QQ", n, t)` in `lines.NNNN.idx`                                                                                     |
-| Liveness            | held flock on `process.lock`                                                                                                                       |
-| Heartbeat           | active `lines.*.idx` mtime advanced every 30s (`heartbeatSec`)                                                                                     |
-| Config              | `~/.live/config.json` plus optional per-`.live/` overrides                                                                                         |
+| Thing               | Value                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Read scope          | walk up from cwd to nearest `.live/`, recursive `os.scandir` from its parent; fallback `~/.live/`; `-g` (reads only) recurses from `~` |
+| Write scope (`run`) | nearest `.live/` walking up from cwd; fallback `~/.live/`                                                                              |
+| Capture             | PTY, merged stdout + stderr                                                                                                            |
+| TTL                 | 7 days from `deadAt` mtime, dead sessions only                                                                                         |
+| Segment size        | 64 KB rotation threshold; lines never split                                                                                            |
+| Retention           | 512 KB total per session; oldest segments unlinked when over                                                                           |
+| Index format        | binary, 16-byte `struct.pack(">QQ", n, t)` in `lines.NNNN.idx`                                                                         |
+| Liveness            | held flock on `process.lock`                                                                                                           |
+| Heartbeat           | active `lines.*.idx` mtime advanced every 30s (`heartbeatSec`)                                                                         |
+| Config              | `~/.live/config.json` plus optional per-`.live/` overrides                                                                             |
