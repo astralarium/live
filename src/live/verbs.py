@@ -226,6 +226,8 @@ def cmd_tail(args) -> int:
             cfg=cfg,
             info=info,
             initial_cursor=result.last_line,
+            initial_partial_bytes=result.partial_bytes,
+            initial_partial_seg=result.partial_seg,
             strip=strip,
         )
 
@@ -234,6 +236,10 @@ def cmd_tail(args) -> int:
 
 
 def cmd_rm(args) -> int:
+    if not args.selectors and not args.all_exited:
+        _err("rm: missing selector (or --all-exited)")
+        return 2
+
     scope = resolve_scope()
     cfg = load_config(scope)
     sweep_all(scope, cfg)

@@ -44,7 +44,7 @@ def _make_parser() -> argparse.ArgumentParser:
     tail_p = sub.add_parser("tail", help="Tail a session.")
     tail_p.add_argument("-v", "--verbose", action="store_true")
     tail_p.add_argument("-f", "--follow", action="store_true",
-                        help="Follow new lines (not yet implemented).")
+                        help="Follow new lines until the recorder exits.")
     ag = tail_p.add_mutually_exclusive_group()
     ag.add_argument("--strip-ansi", action="store_true", dest="strip_ansi")
     ag.add_argument("--raw", action="store_true", dest="raw")

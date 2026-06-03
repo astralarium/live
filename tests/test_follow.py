@@ -76,6 +76,60 @@ def test_follow_streams_lines_as_they_arrive(project: Path, live_env) -> None:
             rec.wait(timeout=5)
 
 
+def test_follow_does_not_duplicate_partial_line(project: Path, live_env) -> None:
+    # Recorder: complete line, then a partial prompt (no \n), sleep so the
+    # partial sits there past several follower loop iterations, then complete
+    # the partial line and exit. With the duplication bug, the follower would
+    # re-emit "Continue? [Y/n] " on every ~1s tick AND again as part of the
+    # full line once the \n arrived.
+    script = (
+        "printf 'first\\n'; "
+        "printf 'Continue? [Y/n] '; "
+        "sleep 2.5; "
+        "printf 'y\\n'"
+    )
+    rec = subprocess.Popen(
+        [sys.executable, "-m", "live.cli", "run", "-n", "pdup", "--",
+         "sh", "-c", script],
+        cwd=str(project),
+        env=live_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        sessions = project / ".live" / "sessions"
+        assert _wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
+        [sess] = list(sessions.iterdir())
+        idx = sess / "lines.0000.idx"
+        assert _wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+                         timeout=5.0)
+
+        follower = subprocess.Popen(
+            [sys.executable, "-m", "live.cli", "tail", "-f", "pdup"],
+            cwd=str(project),
+            env=live_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, _ = follower.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            follower.kill()
+            stdout, _ = follower.communicate()
+            pytest.fail("follower did not exit when recorder finished")
+
+        body = stdout.replace("\r", "")
+        # Each fragment appears exactly once.
+        assert body.count("first\n") == 1, body
+        assert body.count("Continue? [Y/n] ") == 1, body
+        assert body.count("y\n") == 1, body
+    finally:
+        if rec.poll() is None:
+            rec.kill()
+            rec.wait(timeout=5)
+
+
 def test_follow_clean_exit_on_sigint(project: Path, live_env) -> None:
     # A long-running recorder.
     rec = subprocess.Popen(

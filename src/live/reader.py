@@ -123,6 +123,7 @@ class ReadResult:
     first_retained: int  # firstLine of session at read time
     partial_bytes: int  # k bytes in partial-line tail
     partial_age: float  # age of partial line in seconds (0.0 if none)
+    partial_seg: int | None  # segment number carrying the partial (None if no partial)
 
 
 def lines_since(
@@ -133,7 +134,7 @@ def lines_since(
     """Read lines with n > since. Includes any partial-line tail in stdout."""
     refs = segment_refs(session_dir)
     if not refs:
-        return ReadResult(b"", [], 0, 0, 0, 0, 0, 0.0)
+        return ReadResult(b"", [], 0, 0, 0, 0, 0, 0.0, None)
 
     # Compute firstLine/lastLine, decide gap.
     first_line = 0
@@ -183,6 +184,7 @@ def lines_since(
     # Partial-line tail in the highest segment.
     partial_bytes = 0
     partial_age = 0.0
+    partial_seg: int | None = None
     if refs:
         last_ref = refs[-1]
         records = read_idx_records(last_ref.idx_path)
@@ -190,6 +192,7 @@ def lines_since(
         tail = partial_tail_bytes(stream, records)
         if tail:
             partial_bytes = len(tail)
+            partial_seg = last_ref.seg
             # Estimate age from active idx mtime (heartbeat keeps it fresh,
             # but on partial-only activity the mtime equals last-completed-line time).
             try:
@@ -209,6 +212,7 @@ def lines_since(
         first_retained=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
+        partial_seg=partial_seg,
     )
 
 
@@ -261,4 +265,5 @@ def tail_last(
         first_retained=result.first_retained,
         partial_bytes=result.partial_bytes,
         partial_age=result.partial_age,
+        partial_seg=result.partial_seg,
     )

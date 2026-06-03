@@ -46,6 +46,8 @@ def follow_session(
     cfg: Config,
     info: SessionInfo,
     initial_cursor: int,
+    initial_partial_bytes: int = 0,
+    initial_partial_seg: int | None = None,
     strip: bool,
 ) -> int:
     """Emit new lines as they arrive; return 0 on clean exit."""
@@ -55,7 +57,8 @@ def follow_session(
 
     session_dir = info.path
     cursor = initial_cursor
-    last_partial_bytes = 0
+    partial_emitted = initial_partial_bytes
+    partial_seg: int | None = initial_partial_seg
     hung_emitted = False
 
     watcher = new_watcher()
@@ -97,8 +100,9 @@ def follow_session(
                     pass
 
             # Emit any newly indexed lines, across all segments after the cursor.
-            new_cursor, new_partial_bytes = _emit_new_lines(
-                session_dir, cursor, strip
+            new_cursor, partial_emitted, partial_seg = _emit_new_lines(
+                session_dir, cursor, strip,
+                partial_emitted=partial_emitted, partial_seg=partial_seg,
             )
             if new_cursor > cursor:
                 cursor = new_cursor
@@ -120,7 +124,10 @@ def follow_session(
                 continue
 
             # Lock released -> recorder exited. Drain anything left, then emit trailer.
-            final_cursor, _ = _emit_new_lines(session_dir, cursor, strip)
+            final_cursor, _, _ = _emit_new_lines(
+                session_dir, cursor, strip,
+                partial_emitted=partial_emitted, partial_seg=partial_seg,
+            )
             cursor = max(cursor, final_cursor)
             _emit_exit_trailer(session_dir, info.id, cursor, cfg)
             return 0
@@ -131,32 +138,61 @@ def follow_session(
         signal.signal(signal.SIGINT, prev_handler)
 
 
-def _emit_new_lines(session_dir: Path, cursor: int, strip: bool) -> tuple[int, int]:
-    """Emit lines with n > cursor across all segments. Return (new_cursor, partial_bytes)."""
+def _emit_new_lines(
+    session_dir: Path,
+    cursor: int,
+    strip: bool,
+    *,
+    partial_emitted: int,
+    partial_seg: int | None,
+) -> tuple[int, int, int | None]:
+    """Emit content past (cursor, partial_emitted on partial_seg). Returns updated state."""
     segs = list_segments(session_dir).nums
     new_cursor = cursor
-    partial_bytes = 0
+    new_partial_emitted = partial_emitted
+    new_partial_seg = partial_seg
     out = bytearray()
+    if not segs:
+        return new_cursor, new_partial_emitted, new_partial_seg
+
+    pending = partial_emitted
+    pending_seg = partial_seg
+
     for seg in segs:
         records = read_idx_records(session_dir / idx_name(seg))
-        if not records:
-            continue
-        seg_last = records[-1][0]
-        if seg_last <= cursor:
-            continue
         stream = stream_segment_bytes(session_dir / stream_name(seg))
         lines = lines_in_segment(stream, records)
+
         for rec_idx, (n, _t) in enumerate(records):
             if n <= cursor or rec_idx >= len(lines):
                 continue
-            out.extend(lines[rec_idx])
+            line = lines[rec_idx]
+            # If we previously emitted partial bytes that have now been
+            # absorbed into this newly-complete line, trim them off the front.
+            if pending and pending_seg == seg:
+                line = line[pending:]
+                pending = 0
+                pending_seg = None
+            out.extend(line)
             new_cursor = max(new_cursor, n)
-        # Track partial-line bytes only on the active (highest) segment.
+
+        # Only the active (highest-numbered) segment can carry a partial tail.
+        # Lines never split across rotation, so a frozen segment has no partial.
         if seg == segs[-1]:
             tail = partial_tail_bytes(stream, records)
-            partial_bytes = len(tail)
-            if tail:
-                out.extend(tail)
+            already = pending if pending_seg == seg else 0
+            if len(tail) > already:
+                out.extend(tail[already:])
+                new_partial_emitted = len(tail)
+                new_partial_seg = seg
+            elif len(tail) == 0:
+                new_partial_emitted = 0
+                new_partial_seg = None
+            else:
+                # Partial unchanged or shrunk; resync to current length.
+                new_partial_emitted = len(tail)
+                new_partial_seg = seg
+
     if out:
         data = strip_ansi(bytes(out)) if strip else bytes(out)
         try:
@@ -164,7 +200,7 @@ def _emit_new_lines(session_dir: Path, cursor: int, strip: bool) -> tuple[int, i
             sys.stdout.buffer.flush()
         except BrokenPipeError:
             pass
-    return new_cursor, partial_bytes
+    return new_cursor, new_partial_emitted, new_partial_seg
 
 
 def _emit_exit_trailer(

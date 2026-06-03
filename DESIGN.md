@@ -90,7 +90,7 @@ Follow mode for humans. Emit the initial slice (`-n LINES`, `-c BYTES`, `--since
 
 Lists sessions in scope, newest-first (UUIDv7 lex desc). Running only by default; `-a` / `--all` includes exited. `-n NAME` filters to that label.
 
-Default output: human columns — id-prefix, status, name (if set), command. `--json` emits NDJSON, one object per session, with the full field set:
+Default output: human columns — id-prefix, status, name, command. The name column is always rendered; sessions started without `-n NAME` show `-`. `--json` emits NDJSON, one object per session, with the full field set:
 
 - `id`, `command`, `cwd`, `startedAt`
 - `name?` — present iff started with `-n NAME`
