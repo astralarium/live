@@ -2,7 +2,7 @@
 
 Stream long-lived command output to coding agents.
 
-See [DESIGN.md](DESIGN.md) for the design spec.
+See [DESIGN.md](DESIGN.md) for the design spec and [DEVELOPMENT.md](DEVELOPMENT.md) for working on `live` itself.
 
 ## Install
 
@@ -45,17 +45,3 @@ Completes verbs, per-verb flags, and session names (via `live ls -a --json`).
 After `live run`, completion hands off to the wrapped command's own completion —
 so `live run git che<TAB>` becomes `live run git checkout`.
 
-## Development
-
-Install from source:
-
-```sh
-cd path/to/here
-uv venv --python ">=3.14"
-source .venv/bin/activate
-uv pip install -e .
-live --version
-```
-
-`live` is now on `$PATH` for the activated shell, and edits to `src/live/` take
-effect on the next invocation.
