@@ -1,29 +1,29 @@
 # `live` — design
 
-Stream CLI command output to agents via an MCP server. `live run <cmd>` wraps a command under a PTY, mirrors output to the terminal, and records the bytes to disk in the nearest `.live/`. The MCP server hands agents session paths so they read with their own shell tools; a `cursor` tool returns the segment list and skip count for resumable polling.
+Stream CLI command output to agents. `live run <cmd>` wraps a command under a PTY, mirrors output to the terminal, and records the bytes to disk in the nearest `.live/`.
+Inspect command output with `live cat` and `live tail`, piping to shell tools like `grep`.
 
-The recorder is the sole writer of session content. The MCP server reads sessions and runs lifecycle sweeps. No daemon, no broker, no persistent server-side state.
+The recorder is the sole writer of session content. Read verbs are stateless and run lifecycle sweeps. No daemon, no broker, no persistent state.
 
 Python 3.14+, POSIX-only (Linux, macOS, WSL).
 
 ## CLI
 
-| Verb                                              | Purpose                                                                                                                                                                                              |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-n NAME] [--] <cmd…>`                  | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                          |
-| `live ls [-g] [-n NAME] [-a]`                     | List running sessions in scope. `-a` / `--all` includes exited.                                                                                                                                      |
-| `live cat [-g] <SELECTOR>`                        | Concatenate all `stream.*.log` for the session.                                                                                                                                                      |
-| `live tail [-g] [-n LINES] [-c BYTES] <SELECTOR>` | Tail snapshot. Unix `tail` flag conventions.                                                                                                                                                         |
-| `live rm [-g] [-f] [--all-exited] <SELECTOR…>`    | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed. |
-| `live init`                                       | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                       |
-| `live mcp`                                        | Start the MCP server on stdio.                                                                                                                                                                       |
-| `live completion <bash\|zsh\|fish>`               | Print the shell completion script.                                                                                                                                                                   |
+| Verb                                                                 | Purpose                                                                                                                                                                                              |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live run [-n NAME] [--] <cmd…>`                                     | Wrap `<cmd>` under a PTY, mirror to stdout, record to disk.                                                                                                                                          |
+| `live ls [-g] [-n NAME] [-a] [--json]`                               | List sessions in scope. `-a` / `--all` includes exited; `--json` emits NDJSON with the full per-session field set.                                                                                   |
+| `live cat [-g] <SELECTOR>`                                           | Concatenate all `stream.*.log` for the session.                                                                                                                                                      |
+| `live tail [-g] [-n LINES \| -c BYTES \| --since-line N] <SELECTOR>` | Tail. Unix `tail` flag conventions; `--since-line N` outputs lines after `N` for resumable polling.                                                                                                  |
+| `live rm [-g] [-f] [--all-exited] <SELECTOR…>`                       | Delete sessions. `-f` SIGTERMs running recorders and ignores nonexistent. `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed. |
+| `live init`                                                          | Create `.live/`, `.live/sessions/`, and `.live/.gitignore` in cwd. Idempotent.                                                                                                                       |
+| `live completion <bash\|zsh\|fish>`                                  | Print the shell completion script.                                                                                                                                                                   |
 
 `live`, `live -h`: usage. `live <verb> -h`: per-verb help. `live --version`.
 
 ### Scope
 
-Read verbs and the MCP server walk up from cwd (or `serverCwd`) to the nearest `.live/`, then recursive `os.scandir` from its parent. If walk-up finds nothing, scope is `~/.live/`.
+Read verbs walk up from cwd to the nearest `.live/`, then recursive `os.scandir` from its parent. If walk-up finds nothing, scope is `~/.live/`.
 
 `-g` / `--global` (read verbs only) skips the walk-up and recurses from `~`.
 
@@ -45,6 +45,30 @@ Selectors are required on `cat`, `tail`, `rm`. `rm` accepts multiple (Unix `rm` 
 ### `live run` argv
 
 `live run` consumes `-n NAME` / `--name=NAME`; everything from the first non-flag token (or after `--`) is the opaque wrapped command.
+
+### `live tail --since-line`
+
+Resumable polling for agents. Outputs lines with `n > N` to stdout. `--since-line` is mutually exclusive with `-n` / `-c`.
+
+- Caught up (`N >= lastLine`): empty stdout, exit 0.
+- Gap (`N + 1 < firstLine` because retention dropped lines): output starts from the oldest retained line; stderr gets one line, `live tail: dropped <k> lines (since=<N>, first retained=<firstLine>)`. Exit 0.
+- Agent loop: track `N` in conversation state; after each call, advance `N` by the number of output lines.
+
+### `live ls`
+
+Lists sessions in scope, newest-first (UUIDv7 lex desc). Running only by default; `-a` / `--all` includes exited. `-n NAME` filters to that label.
+
+Default output: human columns — id-prefix, status, name (if set), command. `--json` emits NDJSON, one object per session, with the full field set:
+
+- `id`, `command`, `cwd`, `startedAt`
+- `name?` — present iff started with `-n NAME`
+- `status` — `"running"` | `"hung"` | `"exited"` | `"inconsistent"`. `"hung"` = flock held but `now − lastActivity > 3 × heartbeatSec`. `"inconsistent"` = torn recording (from `deadAt` content).
+- `exitedAt?` — see [`meta.json`](#metajson) precedence
+- `exitCode?` — present on graceful exit
+- `path` — absolute session directory
+- `firstSegment`, `lastSegment`
+- `firstLine`, `lastLine`, `count`
+- `lastActivity` — ms-since-epoch mtime of the active `lines.*.idx`
 
 ## On-disk layout
 
@@ -97,7 +121,7 @@ Segment list and watermarks are derived from the filesystem:
 - `lastLine` = unpack the trailing 16 bytes of `lines.<lastSegment>.idx`; if empty, walk back one segment.
 - `count` = `lastLine − firstLine + 1`.
 
-MCP `exitedAt` precedence: `meta.exitedAt` (graceful, exact) → mtime of the active `lines.*.idx` (crash; bounded within `heartbeatSec`) → `mtime(deadAt)` (fallback).
+`exitedAt` precedence: `meta.exitedAt` (graceful, exact) → mtime of the active `lines.*.idx` (crash; bounded within `heartbeatSec`) → `mtime(deadAt)` (fallback).
 
 ### `lines.NNNN.idx`
 
@@ -107,7 +131,7 @@ Append-only binary, 16-byte records: `struct.pack(">QQ", n, t)` — uint64 BE li
 
 Goal: `live <cmd>` is transparent — keystrokes, prompts, Ctrl-C, and resize reach `<cmd>` directly.
 
-Child: `pty.fork()` → `os.execvp`. Parent puts stdin in raw mode (`tty.setraw(0)`, saved and restored on exit) and selects on `[0, master_fd, wakeup_fd]`:
+Child: `pty.fork()` → `os.execvp`. Parent selects on `[0, master_fd, wakeup_fd]`. If `os.isatty(0)`, stdin is put in raw mode (`tty.setraw(0)`, saved and restored on exit); otherwise raw mode is skipped and the PTY still works with redirected/piped stdin.
 
 - `master_fd` → write to `sys.stdout.buffer`, append to `stream.NNNN.log`, update line index.
 - stdin → write to `master_fd`. The PTY's line discipline routes ^C to the child's pgroup.
@@ -154,7 +178,7 @@ Configurable per `.live/`:
 
 ### Sweep
 
-Runs on every `live` verb that touches sessions and every MCP `list_sessions` / `cursor` call. Concurrent sweepers are race-safe: `O_EXCL` for `deadAt` creation, unlinks tolerate `ENOENT`.
+Runs on every `live` verb that touches sessions. Concurrent sweepers are race-safe: `O_EXCL` for `deadAt` creation, unlinks tolerate `ENOENT`.
 
 ```
 for each session in this .live/sessions/:
@@ -177,10 +201,12 @@ Graceful exit stamps `deadAt` directly. Sweepers compute the verdict by comparin
 
 On normal child exit: write `meta.exitedAt` and `meta.exitCode`, atomically replace meta, create an empty `deadAt`, close the lock fd. `SIGTERM`/`SIGHUP`/`SIGINT` route to the same path.
 
+`live run` then exits with the child's exit code: `os.WEXITSTATUS(status)` if the child exited normally, `128 + os.WTERMSIG(status)` if it died on a signal. `meta.exitCode` records the same value.
+
 ### `live rm -f` on a running session
 
-1. Read the pid from `process.lock`.
-2. `SIGTERM` the recorder.
+1. Probe `process.lock` with `flock(LOCK_EX | LOCK_NB)`. If the lock is free, skip to step 5 — the recorder is already gone and the pid in the file may have been recycled.
+2. Read the pid from `process.lock` and `SIGTERM` the recorder.
 3. Wait up to 5s for `flock` release.
 4. `SIGKILL` if still alive.
 5. Unlink the session directory.
@@ -200,78 +226,7 @@ Any `.live/` may carry its own `config.json` to override fields. Per-field layer
 Validation via `pydantic.BaseModel` with `ConfigDict(extra="ignore")`: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all finite.
 
 - Malformed per-project config: log + ignore.
-- Malformed home config: CLI warns and falls back to defaults; MCP surfaces an error.
-
-## MCP server
-
-Started by `live mcp`. Official `mcp` Python SDK over stdio. Tool I/O is `pydantic` models; the SDK derives JSONSchema. Tool descriptions are the contractual API surface and live in `src/live/mcp/server.py`.
-
-Per-connection state (lives for the stdio process lifetime):
-
-- `cursors: dict[tuple[str, str], int]` — `(path, session_id)` → last-returned line.
-
-### `list_sessions`
-
-```python
-class ListSessionsInput(BaseModel):
-    include_exited: bool = False
-    name: str | None = None
-```
-
-Walks up from `serverCwd` to the nearest `.live/`, scans recursively from its parent, sweeps each discovered `.live/`. Returns every matching session in scope, sorted by `id` desc. `include_exited=true` adds exited sessions.
-
-Per entry:
-
-- `id`, `command`, `cwd`, `startedAt`
-- `name?` — present iff started with `-n NAME`
-- `status` — `"running"` | `"hung"` | `"exited"` | `"inconsistent"`. `"hung"` = flock held but `now − lastActivity > 3 × heartbeatSec`. `"inconsistent"` = torn recording (from `deadAt` content).
-- `exitedAt?` — see [`meta.json`](#metajson) precedence
-- `exitCode?` — present on graceful exit
-- `path` — absolute session directory
-- `firstSegment`, `lastSegment`
-- `firstLine`, `lastLine`, `count`
-- `lastActivity` — ms-since-epoch mtime of the active `lines.*.idx`.
-
-### `cursor`
-
-```python
-class CursorInput(BaseModel):
-    path: str
-    session_id: str
-    since_line: int | None = None
-```
-
-`since_line` explicitly overrides and updates the tracked cursor. Omitted → tracked cursor; on first use for a session, placed at current `lastLine`.
-
-Returns:
-
-- `segments: list[str]` — ordered filenames to concatenate, relative to `path`.
-- `skip_lines: int` — file-relative skip against the concatenation. Agents read with `cat <path>/{segments…} | tail -n +$((skip_lines + 1))`.
-- `last_line: int` — informational.
-- `gap: bool` — `true` when `since_line + 1 < firstLine`.
-
-Algorithm:
-
-```python
-segs = sorted_segment_numbers(path)            # from `lines.NNNN.idx` filenames
-if not segs or since_line >= lastLine(path):
-    return caught_up()
-target = since_line + 1
-first_ns = [first_n(path, i) for i in segs]    # 8 bytes per segment, K ≤ maxKb/segmentKb
-k = bisect.bisect_right(first_ns, target) - 1
-if k < 0:
-    return all_segments_with_gap_flag()
-chosen = segs[k:]
-skip_lines = since_line - first_ns[k] + 1
-```
-
-Edge cases:
-
-- **First call** for `(path, session_id)`: cursor at current `lastLine`, return `segments: []`.
-- **Caught up** (`since_line >= lastLine`): `segments: []`.
-- **Gap** (`since_line + 1 < firstLine`): every segment, `skip_lines: 0`, `gap: true`.
-- **Empty session** (`lastLine: 0`): degenerate caught-up.
-- **Session gone** (no `meta.json`): MCP `INVALID_PARAMS` naming the session so the agent drops its cached cursor.
+- Malformed home config: warn and fall back to defaults.
 
 ## Shell completion
 
@@ -293,41 +248,18 @@ live completion fish > ~/.config/fish/completions/live.fish
 
 Python 3.14+. `pyproject.toml` with `hatchling`, `[project.scripts] live = "live.cli:main"`. PyPI: `astralarya-live`. Install via `pipx install astralarya-live` or `uv tool install astralarya-live`.
 
-Dependencies (pure Python):
-
-- `mcp` — official MCP Python SDK.
-- `pydantic` v2 — schema validation.
-
-PTY, flock, ioctl, signals, atomic rename, struct packing, and UUIDv7 are all stdlib. No native build step.
-
-MCP client config:
-
-```json
-{ "mcpServers": { "live": { "command": "live", "args": ["mcp"] } } }
-```
-
-Or `uvx`:
-
-```json
-{
-  "mcpServers": {
-    "live": { "command": "uvx", "args": ["astralarya-live", "mcp"] }
-  }
-}
-```
+One dependency: `pydantic` v2 for config validation. PTY, flock, ioctl, signals, atomic rename, struct packing, and UUIDv7 are all stdlib. No native build step.
 
 ## Defaults
 
 | Thing               | Value                                                                                                                                              |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Read / MCP scope    | walk up from cwd/`serverCwd` to nearest `.live/`, recursive `os.scandir` from its parent; fallback `~/.live/`; `-g` (reads only) recurses from `~` |
+| Read scope          | walk up from cwd to nearest `.live/`, recursive `os.scandir` from its parent; fallback `~/.live/`; `-g` (reads only) recurses from `~`             |
 | Write scope (`run`) | nearest `.live/` walking up from cwd; fallback `~/.live/`                                                                                          |
 | Capture             | PTY, merged stdout + stderr                                                                                                                        |
 | TTL                 | 7 days from `deadAt` mtime, dead sessions only                                                                                                     |
 | Segment size        | 64 KB rotation threshold; lines never split                                                                                                        |
 | Retention           | 512 KB total per session; oldest segments unlinked when over                                                                                       |
-| MCP entry           | `live mcp`                                                                                                                                         |
-| MCP surface         | `list_sessions`, `cursor`                                                                                                                          |
 | Index format        | binary, 16-byte `struct.pack(">QQ", n, t)` in `lines.NNNN.idx`                                                                                     |
 | Liveness            | held flock on `process.lock`                                                                                                                       |
 | Heartbeat           | active `lines.*.idx` mtime advanced every 30s (`heartbeatSec`)                                                                                     |
