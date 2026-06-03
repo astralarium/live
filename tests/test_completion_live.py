@@ -7,10 +7,22 @@ the offered candidates include the expected verbs and flags.
 from __future__ import annotations
 
 import shutil
+import signal
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
+
+
+def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
 
 
 CORE_VERBS = {"run", "ls", "cat", "tail", "rm", "completion"}
@@ -165,7 +177,7 @@ def test_bash_run_offers_own_flags_before_command(
     run_live, tmp_path: Path
 ) -> None:
     """Before any wrapped command is typed, `live run -<TAB>` offers our own flags
-    (`-n`/`--name`/`--`) — NOT a handoff to anything else."""
+    (`-n`/`--`) — NOT a handoff to anything else."""
     script = run_live(tmp_path, "completion", "bash").stdout
     payload = tmp_path / "live.bash"
     payload.write_text(script)
@@ -184,7 +196,87 @@ printf '%s\\n' "${{COMPREPLY[@]}}"
         ["bash", "-c", drive], capture_output=True, text=True, check=True,
     ).stdout
     assert "OFFSET_CALLED" not in out, f"handoff fired prematurely: {out!r}"
-    assert "-n" in out.split() or "--name" in out.split(), out
+    assert "-n" in out.split(), out
+    assert "--name" not in out.split(), out
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_ls_completes_only_active_sessions(
+    run_live, live_env, tmp_path: Path
+) -> None:
+    """`live ls <TAB>` should suggest only running/hung sessions; `live ls -a <TAB>`
+    must include exited; `live rm <TAB>` must include exited regardless of -a."""
+    # `live` shim on PATH so the completion's `live ls --json` call works.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "live"
+    shim.write_text(f'#!/bin/sh\nexec {sys.executable} -m live.cli "$@"\n')
+    shim.chmod(0o755)
+    import os
+    test_env = dict(live_env)
+    test_env["PATH"] = f"{bin_dir}{os.pathsep}{test_env.get('PATH', '')}"
+
+    # Exited session.
+    run_live(tmp_path, "run", "-n", "deadname", "--", "sh", "-c", "echo d")
+    # Long-running session.
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "live.cli", "run", "-n", "liverun", "--",
+         "sh", "-c", "echo l; sleep 60"],
+        cwd=str(tmp_path),
+        env=live_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        # Wait until the live session is registered as running.
+        assert _wait_for(
+            lambda: "liverun" in run_live(tmp_path, "ls", "--json").stdout,
+            timeout=8.0,
+        ), "running session never appeared"
+
+        script = run_live(tmp_path, "completion", "bash").stdout
+        payload = tmp_path / "live.bash"
+        payload.write_text(script)
+
+        def drive(verb_words: str, cword: int) -> set[str]:
+            drive_script = f"""
+set +e
+source {payload}
+COMP_WORDS=(live {verb_words})
+COMP_CWORD={cword}
+COMP_LINE="live {verb_words.replace('"', '')}"
+COMP_POINT=${{#COMP_LINE}}
+_live_complete 2>/dev/null
+printf '%s\\n' "${{COMPREPLY[@]}}"
+"""
+            out = subprocess.run(
+                ["bash", "-c", drive_script],
+                capture_output=True, text=True, check=True,
+                env=test_env, cwd=str(tmp_path),
+            ).stdout
+            return {ln for ln in out.split() if ln}
+
+        # `live ls <TAB>` — active only.
+        ls_active = drive('ls ""', cword=2)
+        assert "liverun" in ls_active, ls_active
+        assert "deadname" not in ls_active, ls_active
+
+        # `live ls -a <TAB>` — both.
+        ls_all = drive('ls -a ""', cword=3)
+        assert "liverun" in ls_all, ls_all
+        assert "deadname" in ls_all, ls_all
+
+        # `live rm <TAB>` — both (rm always passes -a internally).
+        rm_all = drive('rm ""', cword=2)
+        assert "liverun" in rm_all, rm_all
+        assert "deadname" in rm_all, rm_all
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
 
 
 @pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")

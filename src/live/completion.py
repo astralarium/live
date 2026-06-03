@@ -1,8 +1,11 @@
 """Shell completion script payloads, returned by `live completion <shell>`.
 
-Each script offers verb completion, per-verb flag completion, session-name
-completion (via `live ls -a --json`), and `live run <TAB>` handoff to the
-wrapped command's completion.
+Each script offers verb completion, per-verb flag completion, selector
+completion (NAME or UUID via `live ls --json`), and `live run <TAB>` handoff
+to the wrapped command's completion. The selector helper mirrors the verb's
+scope flags: `ls` only suggests active sessions unless `-a` was typed;
+`cat`/`tail`/`rm` always pass `-a` since exited sessions remain valid
+targets. `-g` is honored when present in the command line.
 """
 
 from __future__ import annotations
@@ -39,8 +42,7 @@ _live_complete() {
             for ((i=verb_idx+1; i<cword; i++)); do
                 case "${words[i]}" in
                     --) seen_cmd=$((i+1)); break ;;
-                    -n|--name) i=$((i+1)) ;;
-                    --name=*) ;;
+                    -n) i=$((i+1)) ;;
                     -*) ;;
                     *) seen_cmd=$i; break ;;
                 esac
@@ -49,34 +51,34 @@ _live_complete() {
                 _command_offset $seen_cmd
                 return
             fi
-            COMPREPLY=( $(compgen -W "-n --name --" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-n --" -- "$cur") )
             ;;
         ls)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-a --all -g --global --json" -- "$cur") )
             else
-                COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$(_live_selectors $(_live_all_flag) $(_live_global_flag))" -- "$cur") )
             fi
             ;;
         cat)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw" -- "$cur") )
             else
-                COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
             ;;
         tail)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes --since" -- "$cur") )
             else
-                COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
             ;;
         rm)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-f --force -g --global --all-exited" -- "$cur") )
             else
-                COMPREPLY=( $(compgen -W "$(_live_session_names)" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
             ;;
         completion)
@@ -85,9 +87,23 @@ _live_complete() {
     esac
 }
 
-_live_session_names() {
-    live ls -a --json 2>/dev/null \
-        | sed -nE 's/.*"name":"([^"]+)".*/\1/p' \
+_live_all_flag() {
+    local w
+    for w in "${words[@]:1}"; do
+        case "$w" in -a|--all) echo -a; return ;; esac
+    done
+}
+
+_live_global_flag() {
+    local w
+    for w in "${words[@]:1}"; do
+        case "$w" in -g|--global) echo -g; return ;; esac
+    done
+}
+
+_live_selectors() {
+    live ls "$@" --json 2>/dev/null \
+        | awk -F'"' '{ for (i=1;i<=NF;i++) if ($i=="id"||$i=="name") print $(i+2) }' \
         | sort -u
 }
 
@@ -110,10 +126,10 @@ _live() {
         args)
             case $words[1] in
                 run)
-                    # Complete our flags before the wrapped command; any non-flag
+                    # Complete our flag before the wrapped command; any non-flag
                     # word triggers `_normal` against the wrapped command.
                     _arguments -S \
-                        '(-n --name)'{-n+,--name=}':name:' \
+                        '-n+[session name]:name:' \
                         '*::command:_normal'
                     ;;
                 ls)
@@ -121,7 +137,7 @@ _live() {
                         '(-a --all)'{-a,--all} \
                         '(-g --global)'{-g,--global} \
                         '--json' \
-                        '1:selector:_live_sessions'
+                        '1:selector:_live_selectors'
                     ;;
                 cat)
                     _arguments \
@@ -129,7 +145,7 @@ _live() {
                         '(-g --global)'{-g,--global} \
                         '(--strip-ansi --raw)--strip-ansi' \
                         '(--strip-ansi --raw)--raw' \
-                        '1:selector:_live_sessions'
+                        '1:selector:_live_selectors'
                     ;;
                 tail)
                     _arguments \
@@ -141,14 +157,14 @@ _live() {
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
                         '--since=:epoch-seconds:' \
-                        '1:selector:_live_sessions'
+                        '1:selector:_live_selectors'
                     ;;
                 rm)
                     _arguments \
                         '(-f --force)'{-f,--force} \
                         '(-g --global)'{-g,--global} \
                         '--all-exited' \
-                        '*:selector:_live_sessions'
+                        '*:selector:_live_selectors'
                     ;;
                 completion)
                     _arguments '1:shell:(bash zsh fish)'
@@ -172,10 +188,24 @@ _live_verbs() {
     _describe -t verbs 'verb' verbs
 }
 
-_live_sessions() {
-    local -a names
-    names=( ${(f)"$(live ls -a --json 2>/dev/null | sed -nE 's/.*"name":"([^"]+)".*/\1/p' | sort -u)"} )
-    (( $#names )) && _values 'session' "${names[@]}"
+# Selector completion. For `live ls`, only suggest active sessions unless -a
+# was typed; for other verbs, always include exited (still valid targets).
+# Honors -g/--global when present in the command line.
+_live_selectors() {
+    local -a sel_args names
+    local w want_all=0 want_global=0
+    for w in $words[@]; do
+        case $w in
+            -a|--all) want_all=1 ;;
+            -g|--global) want_global=1 ;;
+        esac
+    done
+    if [[ $words[1] != ls ]] || (( want_all )); then
+        sel_args+=(-a)
+    fi
+    (( want_global )) && sel_args+=(-g)
+    names=( ${(f)"$(live ls $sel_args --json 2>/dev/null | awk -F'"' '{ for (i=1;i<=NF;i++) if ($i=="id"||$i=="name") print $(i+2) }' | sort -u)"} )
+    (( $#names )) && _values 'selector' "${names[@]}"
 }
 
 _live "$@"
@@ -184,8 +214,17 @@ _live "$@"
 
 FISH = r"""# fish completion for live
 
-function __live_session_names
-    live ls -a --json 2>/dev/null | string match -rg '"name":"([^"]+)"' | sort -u
+function __live_selectors
+    set -l toks (commandline -opc)
+    set -l verb $toks[2]
+    set -l args
+    if test "$verb" != "ls"; or contains -- -a $toks; or contains -- --all $toks
+        set -a args -a
+    end
+    if contains -- -g $toks; or contains -- --global $toks
+        set -a args -g
+    end
+    live ls $args --json 2>/dev/null | string match -rga '"(?:id|name)":"([^"]+)"' | sort -u
 end
 
 set -l verbs run ls cat tail rm llms.txt completion
@@ -200,7 +239,7 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Pri
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
 
 # Selector completion for ls / cat / tail / rm.
-complete -c live -n "__fish_seen_subcommand_from ls cat tail rm" -a "(__live_session_names)"
+complete -c live -n "__fish_seen_subcommand_from ls cat tail rm" -a "(__live_selectors)"
 
 # ls
 complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited sessions'
@@ -229,7 +268,7 @@ complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Resolve 
 complete -c live -n "__fish_seen_subcommand_from rm" -l all-exited -d 'Remove every dead session'
 
 # run -- hand off after first non-flag token.
-complete -c live -n "__fish_seen_subcommand_from run" -s n -l name -r -d 'Session name'
+complete -c live -n "__fish_seen_subcommand_from run" -s n -r -d 'Session name'
 complete -c live -n "__fish_seen_subcommand_from run; and __fish_complete_subcommand --skip 2" \
     -a "(__fish_complete_subcommand --skip 2)"
 
