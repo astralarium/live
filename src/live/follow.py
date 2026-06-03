@@ -1,9 +1,4 @@
-"""`live tail -f` follow loop.
-
-Watches the active idx for new records, the session dir for rotation, and the
-lock for liveness changes. Stops on graceful/torn exit, on SIGINT, or on
-session dir disappearance.
-"""
+"""`live tail -f` follow loop: stream new lines until the recorder exits or SIGINT."""
 
 from __future__ import annotations
 
@@ -99,7 +94,6 @@ def follow_session(
                 except OSError:
                     pass
 
-            # Emit any newly indexed lines, across all segments after the cursor.
             new_cursor, partial_emitted, partial_seg = _emit_new_lines(
                 session_dir, cursor, strip,
                 partial_emitted=partial_emitted, partial_seg=partial_seg,
@@ -167,8 +161,7 @@ def _emit_new_lines(
             if n <= cursor or rec_idx >= len(lines):
                 continue
             line = lines[rec_idx]
-            # If we previously emitted partial bytes that have now been
-            # absorbed into this newly-complete line, trim them off the front.
+            # Bytes already shown as partial are now absorbed into this line; trim.
             if pending and pending_seg == seg:
                 line = line[pending:]
                 pending = 0
@@ -176,8 +169,7 @@ def _emit_new_lines(
             out.extend(line)
             new_cursor = max(new_cursor, n)
 
-        # Only the active (highest-numbered) segment can carry a partial tail.
-        # Lines never split across rotation, so a frozen segment has no partial.
+        # Partial tail can only live on the active segment (rotation is line-aligned).
         if seg == segs[-1]:
             tail = partial_tail_bytes(stream, records)
             already = pending if pending_seg == seg else 0
@@ -189,7 +181,6 @@ def _emit_new_lines(
                 new_partial_emitted = 0
                 new_partial_seg = None
             else:
-                # Partial unchanged or shrunk; resync to current length.
                 new_partial_emitted = len(tail)
                 new_partial_seg = seg
 

@@ -339,19 +339,16 @@ class _Recorder:
         # Write stream first (prefix invariant).
         self._write_all(self.stream_fd, chunk)
         self.stream_bytes += len(chunk)
-        # Track partial-line state: any byte past the last \n in chunk is partial.
-        # Iterate \n positions to record idx entries and track timings.
         start = 0
         while True:
             nl = chunk.find(b"\n", start)
             if nl < 0:
-                # Remainder is a partial line (no newline). Start timer if needed.
                 if start < len(chunk):
                     if self.pending_line_start is None:
                         self.pending_line_start = time.time()
                     self.pending_line_bytes += len(chunk) - start
                 break
-            # Line completion: assign n, capture t at the line's first byte.
+            # `t` for this line = timestamp of its first byte.
             t = (
                 self.pending_line_start
                 if self.pending_line_start is not None
@@ -364,7 +361,6 @@ class _Recorder:
             except OSError:
                 raise
             self.last_idx_touch = time.time()
-            # Reset partial-line state for next line.
             self.pending_line_start = None
             self.pending_line_bytes = 0
             start = nl + 1

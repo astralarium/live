@@ -1,7 +1,4 @@
-"""CLI verbs: init, run, ls, cat, tail, rm, llms.txt.
-
-Follow mode (`tail -f`) and shell completion are deferred to a later pass.
-"""
+"""CLI verbs: init, run, ls, cat, tail, rm, llms.txt, completion."""
 
 from __future__ import annotations
 

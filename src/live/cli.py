@@ -87,11 +87,6 @@ def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     parser = _make_parser()
 
-    # `live run` consumes everything after its flags as the wrapped command.
-    # argparse.REMAINDER already handles `--`, but we also need to allow flags
-    # in the wrapped command (e.g. `live run -n dev npm run dev`). The default
-    # argparse handling works because `npm` is non-flag and from there
-    # REMAINDER eats the rest.
     parsed = parser.parse_args(args)
     if not getattr(parsed, "verb", None):
         parser.print_help()

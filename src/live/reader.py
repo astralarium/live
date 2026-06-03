@@ -157,7 +157,6 @@ def lines_since(
         stderr_lines.append(
             f"dropped {dropped} lines (since={since}, first retained={first_line})"
         )
-        # Start emission from firstLine.
         emit_from = first_line
     else:
         emit_from = max(since + 1, first_line) if first_line else 0
@@ -243,11 +242,7 @@ def tail_last(
             count = 0
             i = len(body)
             while i > 0 and count < keep:
-                # Find previous \n before i-1; if i-1 is a \n itself, skip past it.
                 j = body.rfind(b"\n", 0, i - 1) if i >= 1 else -1
-                if body[i - 1 : i] != b"\n":
-                    # tail must include trailing line even without newline
-                    pass
                 count += 1
                 if j < 0:
                     i = 0

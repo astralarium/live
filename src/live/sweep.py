@@ -1,7 +1,4 @@
-"""Lifecycle sweep and per-session status reporting.
-
-See DESIGN.md §Liveness and cleanup.
-"""
+"""Lifecycle sweep and per-session status reporting."""
 
 from __future__ import annotations
 

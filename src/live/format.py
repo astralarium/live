@@ -20,8 +20,8 @@ LOCK_NAME = "process.lock"
 DEAD_NAME = "deadAt"
 INCONSISTENT_MARKER = b"inconsistent\n"
 
-IDX_RECORD = struct.Struct(">Qd")  # uint64 BE line number, float64 BE timestamp (s)
-IDX_RECORD_SIZE = IDX_RECORD.size  # 16
+IDX_RECORD = struct.Struct(">Qd")
+IDX_RECORD_SIZE = IDX_RECORD.size
 
 _STREAM_RE = re.compile(r"^stream\.(\d+)\.log$")
 _IDX_RE = re.compile(r"^lines\.(\d+)\.idx$")
@@ -37,7 +37,7 @@ def idx_name(seg: int) -> str:
 
 @dataclass(frozen=True)
 class Meta:
-    """Session metadata. Times are float seconds; the JSON wire is ms."""
+    """Session metadata. Times are float seconds since epoch."""
 
     id: str
     command: list[str]
@@ -74,7 +74,7 @@ class Meta:
 
 
 def write_meta_atomic(session_dir: Path, meta: Meta) -> None:
-    """Atomic via NamedTemporaryFile(dir=session_dir, delete=False) + fsync + os.replace."""
+    """Write meta.json atomically (same-filesystem tempfile + fsync + rename)."""
     payload = json.dumps(meta.to_dict(), indent=2) + "\n"
     fd, tmp_path = tempfile.mkstemp(prefix=".meta.", suffix=".tmp", dir=str(session_dir))
     try:
@@ -131,7 +131,6 @@ def list_segments(session_dir: Path) -> Segments:
 
 
 def count_complete_lines(stream_path: Path) -> int:
-    """Count `\\n` bytes in the stream segment."""
     count = 0
     try:
         with stream_path.open("rb") as f:
