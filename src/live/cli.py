@@ -82,6 +82,8 @@ def _make_parser() -> argparse.ArgumentParser:
                       help="First N lines (default 10).")
     mode.add_argument("-c", "--bytes", dest="bytes_", type=int, default=None,
                       help="First K bytes.")
+    mode.add_argument("-t", "--time", type=float, default=None,
+                      help="Lines with index timestamp <= T (epoch seconds).")
     head_p.add_argument("selector")
     head_p.set_defaults(func=verbs.cmd_head)
 
@@ -103,7 +105,7 @@ def _make_parser() -> argparse.ArgumentParser:
                       help="Last N lines, or +N for lines with n > N (resumable polling).")
     mode.add_argument("-c", "--bytes", dest="bytes_", type=int, default=None,
                       help="Last K bytes.")
-    mode.add_argument("--since", type=float, default=None,
+    mode.add_argument("-t", "--time", type=float, default=None,
                       help="Lines with index timestamp > T (epoch seconds).")
     tail_p.add_argument("selector")
     tail_p.set_defaults(func=verbs.cmd_tail)

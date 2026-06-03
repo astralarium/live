@@ -1,4 +1,4 @@
-"""Partial-line tail surfacing via tail --since."""
+"""Partial-line tail surfacing via tail -n +0."""
 
 from __future__ import annotations
 

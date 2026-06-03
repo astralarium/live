@@ -1,4 +1,4 @@
-"""CLI verbs: init, run, ls, cat, tail, rm, llms.txt, completion."""
+"""CLI verbs: run, ls, cat, head, tail, rm, llms.txt, completion."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from .reader import (
     head_first,
     lines_since,
     lines_since_time,
+    lines_until_time,
     should_strip_ansi,
     strip_ansi,
     tail_last,
@@ -197,7 +198,10 @@ def cmd_head(args) -> int:
     if res is None:
         return 2
     info, cfg = res
-    result = head_first(info.path, n_lines=args.lines, c_bytes=args.bytes_)
+    if args.time is not None:
+        result = lines_until_time(info.path, until_t=args.time)
+    else:
+        result = head_first(info.path, n_lines=args.lines, c_bytes=args.bytes_)
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
@@ -224,8 +228,8 @@ def cmd_tail(args) -> int:
             n_lines = n
 
     is_line_cursor = since_n is not None
-    is_time_cursor = args.since is not None
-    # Mutual exclusivity (-n / -c / --since) is enforced by argparse.
+    is_time_cursor = args.time is not None
+    # Mutual exclusivity (-n / -c / -t) is enforced by argparse.
 
     verbose = args.verbose
     if is_line_cursor:
@@ -235,10 +239,10 @@ def cmd_tail(args) -> int:
                 f"since={since_n} > at-line={result.last_line}; check id"
             )
     elif is_time_cursor:
-        result = lines_since_time(info.path, since_t=args.since)
-        if args.since > result.at_time and result.at_time:
+        result = lines_since_time(info.path, since_t=args.time)
+        if args.time > result.at_time and result.at_time:
             result.stderr_lines.append(
-                f"since={args.since:.3f} > at-time={result.at_time:.3f}; check id"
+                f"time={args.time:.3f} > at-time={result.at_time:.3f}; check id"
             )
     else:
         result = tail_last(info.path, n_lines=n_lines, c_bytes=args.bytes_)

@@ -36,15 +36,15 @@ def test_cat_explicit_strip_ansi(project: Path, run_live) -> None:
     assert "\x1b[" not in out
 
 
-def test_tail_since_always_strips(project: Path, run_live) -> None:
+def test_tail_strips_when_stdout_not_tty(project: Path, run_live) -> None:
     _record(project, run_live)
-    # -n +N (line cursor) implies --strip-ansi even without --strip-ansi flag.
+    # Default: strip when stdout isn't a TTY (subprocess pipes are never TTYs).
     out = run_live(project, "tail", "-n", "+0", "colors").stdout
     assert "\x1b[" not in out
 
 
-def test_tail_since_raw_keeps_ansi(project: Path, run_live) -> None:
+def test_tail_raw_keeps_ansi_in_pipe(project: Path, run_live) -> None:
     _record(project, run_live)
-    # --raw overrides the cursor-mode default.
+    # --raw keeps ANSI regardless of TTY-default.
     out = run_live(project, "tail", "-n", "+0", "--raw", "colors").stdout
     assert "\x1b[31m" in out

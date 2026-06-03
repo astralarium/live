@@ -371,6 +371,61 @@ def head_first(
     )
 
 
+def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
+    """Read lines whose idx timestamp `t <= until_t`. Partial tail excluded
+    (head semantics: this is the start of the session, not the active end)."""
+    refs = segment_refs(session_dir)
+    if not refs:
+        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
+
+    first_line = 0
+    for ref in refs:
+        rec = first_idx_record(ref.idx_path)
+        if rec is not None:
+            first_line = rec[0]
+            break
+
+    out = bytearray()
+    last_n = 0
+    done = False
+    for ref in refs:
+        if done:
+            break
+        records = read_idx_records(ref.idx_path)
+        if not records:
+            continue
+        if records[0][1] > until_t:
+            break
+        stream = stream_segment_bytes(ref.stream_path)
+        lines = lines_in_segment(stream, records)
+        for rec_idx, (n, t) in enumerate(records):
+            if rec_idx >= len(lines) or t > until_t:
+                done = True
+                break
+            out.extend(lines[rec_idx])
+            last_n = n
+
+    at_time = 0.0
+    try:
+        at_time = os.path.getmtime(refs[-1].stream_path)
+    except FileNotFoundError:
+        at_time = 0.0
+
+    return ReadResult(
+        stdout=bytes(out),
+        stderr_lines=[],
+        first_line=first_line if (first_line and out) else 0,
+        last_line=last_n,
+        at_time=at_time,
+        at_byte=len(out),
+        dropped=0,
+        first_retained=first_line,
+        partial_bytes=0,
+        partial_age=0.0,
+        partial_seg=None,
+    )
+
+
 def tail_last(
     session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
 ) -> ReadResult:

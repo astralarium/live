@@ -69,14 +69,14 @@ _live_complete() {
             ;;
         head)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw -n --lines -c --bytes" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw -n --lines -c --bytes -t --time" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
             ;;
         tail)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes --since" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes -t --time" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
@@ -162,6 +162,7 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
+                        '(-t --time)'{-t+,--time=}':epoch-seconds:' \
                         '1:selector:_live_selectors'
                     ;;
                 tail)
@@ -173,7 +174,7 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
-                        '--since=:epoch-seconds:' \
+                        '(-t --time)'{-t+,--time=}':epoch-seconds:' \
                         '1:selector:_live_selectors'
                     ;;
                 rm)
@@ -278,6 +279,7 @@ complete -c live -n "__fish_seen_subcommand_from head" -l strip-ansi
 complete -c live -n "__fish_seen_subcommand_from head" -l raw
 complete -c live -n "__fish_seen_subcommand_from head" -s n -l lines -r -d 'First N lines (default 10)'
 complete -c live -n "__fish_seen_subcommand_from head" -s c -l bytes -r -d 'First K bytes'
+complete -c live -n "__fish_seen_subcommand_from head" -s t -l time -r -d 'Lines with t <= T (epoch seconds)'
 
 # tail
 complete -c live -n "__fish_seen_subcommand_from tail" -s v -l verbose
@@ -287,7 +289,7 @@ complete -c live -n "__fish_seen_subcommand_from tail" -l strip-ansi
 complete -c live -n "__fish_seen_subcommand_from tail" -l raw
 complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last N lines'
 complete -c live -n "__fish_seen_subcommand_from tail" -s c -l bytes -r -d 'Last K bytes'
-complete -c live -n "__fish_seen_subcommand_from tail" -l since -r -d 'Time cursor (epoch seconds)'
+complete -c live -n "__fish_seen_subcommand_from tail" -s t -l time -r -d 'Time cursor (epoch seconds)'
 
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'Kill running recorders'

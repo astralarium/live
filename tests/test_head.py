@@ -1,4 +1,4 @@
-"""`live head` — first N lines / K bytes, symmetric to `live tail`."""
+"""`live head` — first N lines / K bytes / `-t T`, symmetric to `live tail`."""
 
 from __future__ import annotations
 
@@ -44,3 +44,27 @@ def test_head_verbose_trailer_carries_cursor(project: Path, run_live) -> None:
     assert m, out.stderr
     # at-byte = emitted bytes on disk: 4 lines * len("lineN\r\n") = 28.
     assert int(m.group(1)) == 28
+
+
+def test_head_t_complements_tail_t(project: Path, run_live) -> None:
+    """head -t T and tail -t T should partition the session at cursor T."""
+    run_live(
+        project, "run", "-n", "split", "--", "sh", "-c",
+        "echo early-1; echo early-2; sleep 0.6; echo late-1; echo late-2",
+    )
+    # Probe at-time at the end to learn the timestamp range.
+    full = run_live(project, "tail", "-vn", "+0", "split")
+    m = re.search(r"at-time=([0-9.]+)", full.stderr)
+    assert m, full.stderr
+    end_t = float(m.group(1))
+    cut = end_t - 0.3  # between early and late writes
+
+    head = run_live(project, "head", "-t", f"{cut:.6f}", "split")
+    head_body = head.stdout.replace("\r", "")
+    assert "early-1" in head_body and "early-2" in head_body
+    assert "late-1" not in head_body and "late-2" not in head_body
+
+    tail = run_live(project, "tail", "-t", f"{cut:.6f}", "split")
+    tail_body = tail.stdout.replace("\r", "")
+    assert "late-1" in tail_body and "late-2" in tail_body
+    assert "early-1" not in tail_body and "early-2" not in tail_body

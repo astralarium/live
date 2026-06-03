@@ -1,4 +1,4 @@
-"""`live tail --since T` time-range filtering + trailer `at-time`."""
+"""`live tail -t T` time-range filtering + trailer `at-time`."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def _trailer(stderr: str) -> tuple[str, int, float]:
     return m.group(1), int(m.group(2)), float(m.group(3))
 
 
-def test_since_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
+def test_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
     # Record two lines, pause, record two more.
     run_live(
         project,
@@ -36,7 +36,7 @@ def test_since_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
     _, _, end_time = _trailer(full.stderr)
     cut = end_time - 0.3  # somewhere between "early" and "late" writes
 
-    out = run_live(project, "tail", "-v", "--since", f"{cut:.6f}", "timed")
+    out = run_live(project, "tail", "-v", "-t", f"{cut:.6f}", "timed")
     body = out.stdout.replace("\r", "")
     assert "late-1" in body and "late-2" in body
     # The early lines were recorded well before cut; they must not appear.
@@ -46,23 +46,23 @@ def test_since_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
     assert "at-time=" in out.stderr
 
 
-def test_since_quiet_without_verbose(project: Path, run_live) -> None:
-    # --since alone (no -v) prints lines but no stderr metadata.
+def test_time_quiet_without_verbose(project: Path, run_live) -> None:
+    # -t alone (no -v) prints lines but no stderr metadata.
     run_live(project, "run", "-n", "quiet", "--", "sh", "-c", "echo hello")
-    out = run_live(project, "tail", "--since", "0", "quiet")
+    out = run_live(project, "tail", "-t", "0", "quiet")
     assert "hello" in out.stdout.replace("\r", "")
     assert out.stderr == "", f"expected silent stderr, got: {out.stderr!r}"
 
 
-def test_since_time_in_the_future_emits_cursor_ahead(project: Path, run_live) -> None:
+def test_time_in_the_future_emits_cursor_ahead(project: Path, run_live) -> None:
     run_live(
         project, "run", "-n", "fut", "--",
         "sh", "-c", "echo hello",
     )
     future = time.time() + 3600
-    out = run_live(project, "tail", "-v", "--since", f"{future:.3f}", "fut")
+    out = run_live(project, "tail", "-v", "-t", f"{future:.3f}", "fut")
     assert out.stdout.replace("\r", "") == ""
-    assert "since=" in out.stderr and "> at-time=" in out.stderr
+    assert "time=" in out.stderr and "> at-time=" in out.stderr
     assert "check id" in out.stderr
 
 

@@ -59,9 +59,9 @@ def test_fish_completes_tail_flags(run_live, tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     ).stdout
     candidates = {line.split("\t", 1)[0] for line in out.splitlines() if line}
-    # Should at least suggest -f and --since for `live tail -`.
+    # Should at least suggest -f and -t/--time for `live tail -`.
     assert any(c.startswith("-f") or c == "--follow" for c in candidates), candidates
-    assert any(c == "--since" for c in candidates), candidates
+    assert any(c == "--time" or c == "-t" for c in candidates), candidates
 
 
 # ----- bash -----
@@ -114,7 +114,7 @@ printf '%s\n' "${{COMPREPLY[@]}}"
     ).stdout
     candidates = {ln for ln in out.split() if ln}
     assert "-f" in candidates or "--follow" in candidates, candidates
-    assert any(c == "--since" for c in candidates), candidates
+    assert any(c == "--time" or c == "-t" for c in candidates), candidates
 
 
 # ----- zsh -----

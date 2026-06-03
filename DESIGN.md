@@ -13,8 +13,8 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 | `live run [-n NAME] [--] <cmd…>`                                                                | Run `<cmd>` in a PTY, mirror to stdout, record to disk.                                                                                                                                                                                                                                                                           |
 | `live ls [-a] [-g] [--json] [SELECTOR]`                                                         | List sessions in working directory (or below). Optional `SELECTOR` filters by NAME or UUID-prefix. `-a` include exited; `-g` global directory scope; `--json` emit NDJSON with full session data.                                                                                                                                 |
 | `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                                           | Concatenate session. `-v` verbose output (for agents); `-g` global directory scope; `--strip-ansi` remove ANSI escapes; `--raw` keep them. Default: strip when stdout isn't a TTY.                                                                                                                                                |
-| `live tail [-f] [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since T] <SELECTOR>` | Tail session. Unix `tail` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-f` follow new lines until exit; `-n N` last N lines, `-n +N` lines with `n > N` (resumable polling); `-c K` last K bytes; `--since T` lines with index timestamp `> T` (epoch seconds); ANSI handling matches `cat`. |
-| `live head [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES] <SELECTOR>`                   | Head session. Unix `head` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-n N` first N lines (default 10); `-c K` first K bytes; ANSI handling matches `cat`.                                                                                                                                  |
+| `live tail [-f] [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| -t T] <SELECTOR>`      | Tail session. Unix `tail` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-f` follow new lines until exit; `-n N` last N lines, `-n +N` lines with `n > N` (resumable polling); `-c K` last K bytes; `-t T` lines with index timestamp `> T` (epoch seconds); ANSI handling matches `cat`.       |
+| `live head [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| -t T] <SELECTOR>`           | Head session. Unix `head` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-n N` first N lines (default 10); `-c K` first K bytes; `-t T` lines with index timestamp `<= T` (epoch seconds, complement of `tail -t`); ANSI handling matches `cat`.                                               |
 | `live rm [-f] [-g] [--all-exited] <SELECTOR…>`                                                  | Delete sessions. `-f` SIGTERMs live runs and ignore nonexistent; `-g` global directory scope; `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.                                                                                                          |
 | `live llms.txt`                                                                                 | Print token-minimal agent guide for `live tail -vn +N` polling.                                                                                                                                                                                                                                                                   |
 | `live completion <bash\|zsh\|fish>`                                                             | Print shell completion script.                                                                                                                                                                                                                                                                                                    |
@@ -48,12 +48,12 @@ All verbose lines are prefixed `live: `. The trailing line of any verbose read i
 live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>
 ```
 
-`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed; `<T>` is the active stream segment's mtime (float seconds since epoch) — the wall-clock time of the most recent byte written. Heartbeats touch only the idx file, never the stream, so `<T>` reflects real write activity (partial-line bytes included). `<B>` is the cumulative byte cursor — where `tail -c +B` would resume from. Agents using `-n +N` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change. `<T>` is informational for `-n +N` agents and may also be passed to `--since T` for time-range follow-ups.
+`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed; `<T>` is the active stream segment's mtime (float seconds since epoch) — the wall-clock time of the most recent byte written. Heartbeats touch only the idx file, never the stream, so `<T>` reflects real write activity (partial-line bytes included). `<B>` is the cumulative byte cursor — where `tail -c +B` would resume from. Agents using `-n +N` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change. `<T>` is informational for `-n +N` agents and may also be passed to `-t T` for time-range follow-ups.
 
 Additional stderr lines may precede the trailer, in this order when multiple apply:
 
 1. Gap — retention dropped lines, or `cat` reading a session whose oldest segment has been unlinked: `live: dropped <k> lines (since=<N>, first retained=<firstLine>)`. For `cat`, `<N>` is `0`.
-2. Cursor ahead — `tail -n +N` with `N > lastLine`, or `tail --since T` with `T > at-time`; likely session swap: `live: since=<N> > at-line=<L>; check id` or `live: since=<T> > at-time=<at-time>; check id`.
+2. Cursor ahead — `tail -n +N` with `N > lastLine`, or `tail -t T` with `T > at-time`; likely session swap: `live: since=<N> > at-line=<L>; check id` or `live: time=<T> > at-time=<at-time>; check id`.
 3. Partial line — active stream has unindexed trailing bytes (`\r`-only progress, prompt waiting on input): `live: partial-line bytes=<k> age=<s>`. The partial bytes are emitted to stdout after the last indexed line.
 4. Hung — recorder still running but quiet for too long: `live: status=hung last-activity=<s>`.
 5. Exited — graceful: `live: exit-code=<N>`. Torn recordings emit `live: exit=inconsistent` instead. Omitted for running sessions.
@@ -64,7 +64,7 @@ Exit codes: `0` success; `1` runtime error (I/O, config, recorder failure); `2` 
 
 ### `live tail -n +N`
 
-Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exclusive with `-c` / `--since`. Pass `-v` for the trailer cursor (`live: id=… at-line=… at-time=…`) — agents need this to resume.
+Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exclusive with `-c` / `-t`. Pass `-v` for the trailer cursor (`live: id=… at-line=… at-time=…`) — agents need this to resume.
 
 - Caught up (`N == lastLine`): empty stdout, trailer, exit 0.
 - Cursor ahead (`N > lastLine`): see [Verbose output](#verbose-output).
@@ -73,13 +73,13 @@ Resumable polling for agents. Outputs lines with `n > N` to stdout. Mutually exc
 - Hung session: stdout drains whatever's newly indexed, then `live: status=hung …` appears before the trailer. The session is still alive — polling agents can continue but should warn the user; a subsequent poll either resumes producing lines or eventually reports an exit.
 - Exited session: drained like any live session — tail emits the remaining lines, then the exit trailer (`live: exit-code=<N>` or `live: exit=inconsistent`). Polling loops can stop on that trailer.
 
-### `live tail --since`
+### `live tail -t`
 
 Time-range filter. Outputs lines whose recorded idx timestamp `t > T` (epoch seconds, float). Includes the partial-line tail if the active stream's mtime is also `> T`. Mutually exclusive with `-n` / `-c`. Pass `-v` for the trailer. Useful for "show me everything since <wall-clock time>" queries; not bit-exact for line-by-line resume (use `-n +N` for that — a partial completing between polls can land an idx `t` slightly before the previous trailer's `at-time`).
 
 ### `live tail -f`
 
-Follow mode for humans. Emits the initial slice (`-n LINES`, `-n +N`, `-c BYTES`, `--since T`, or the default last-10 lines), then streams each new line as it's indexed. Exits cleanly on graceful or torn exit; exits without a trailer on `SIGINT`. Composes with `-n +N`, though agents should prefer one-shot `-n +N` polls (`-f` holds a process open, which agents typically don't want).
+Follow mode for humans. Emits the initial slice (`-n LINES`, `-n +N`, `-c BYTES`, `-t T`, or the default last-10 lines), then streams each new line as it's indexed. Exits cleanly on graceful or torn exit; exits without a trailer on `SIGINT`. Composes with `-n +N`, though agents should prefer one-shot `-n +N` polls (`-f` holds a process open, which agents typically don't want).
 
 ### `live ls`
 
