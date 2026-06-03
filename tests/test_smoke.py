@@ -40,6 +40,7 @@ def test_full_cycle(project: Path, run_live) -> None:
     assert f"id={info['id']}" in since.stderr
     assert "at-line=3" in since.stderr
     assert "at-time=" in since.stderr
+    assert "at-byte=" in since.stderr
     assert "exit-code=0" in since.stderr
 
     missing = run_live(project, "cat", "nope", check=False)

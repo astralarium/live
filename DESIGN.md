@@ -14,6 +14,7 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL).
 | `live ls [-a] [-g] [--json] [SELECTOR]`                                                         | List sessions in working directory (or below). Optional `SELECTOR` filters by NAME or UUID-prefix. `-a` include exited; `-g` global directory scope; `--json` emit NDJSON with full session data.                                                                                                                                 |
 | `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                                           | Concatenate session. `-v` verbose output (for agents); `-g` global directory scope; `--strip-ansi` remove ANSI escapes; `--raw` keep them. Default: strip when stdout isn't a TTY.                                                                                                                                                |
 | `live tail [-f] [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES \| --since T] <SELECTOR>` | Tail session. Unix `tail` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-f` follow new lines until exit; `-n N` last N lines, `-n +N` lines with `n > N` (resumable polling); `-c K` last K bytes; `--since T` lines with index timestamp `> T` (epoch seconds); ANSI handling matches `cat`. |
+| `live head [-v] [-g] [--strip-ansi\|--raw] [-n LINES \| -c BYTES] <SELECTOR>`                   | Head session. Unix `head` flag conventions; `-v` verbose output (for agents); `-g` global directory scope; `-n N` first N lines (default 10); `-c K` first K bytes; ANSI handling matches `cat`.                                                                                                                                  |
 | `live rm [-f] [-g] [--all-exited] <SELECTOR…>`                                                  | Delete sessions. `-f` SIGTERMs live runs and ignore nonexistent; `-g` global directory scope; `--all-exited` removes every dead session in scope. Per-selector errors don't abort the batch; nonzero exit if any failed.                                                                                                          |
 | `live llms.txt`                                                                                 | Print token-minimal agent guide for `live tail -vn +N` polling.                                                                                                                                                                                                                                                                   |
 | `live completion <bash\|zsh\|fish>`                                                             | Print shell completion script.                                                                                                                                                                                                                                                                                                    |
@@ -44,10 +45,10 @@ No match → error. Selectors are required on `cat`, `tail`, `rm`; `rm` accepts 
 All verbose lines are prefixed `live: `. The trailing line of any verbose read is the identity/cursor stamp:
 
 ```
-live: id=<uuid> at-line=<L> at-time=<T>
+live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>
 ```
 
-`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed; `<T>` is the active stream segment's mtime (float seconds since epoch) — the wall-clock time of the most recent byte written. Heartbeats touch only the idx file, never the stream, so `<T>` reflects real write activity (partial-line bytes included). Agents using `-n +N` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change. `<T>` is informational for `-n +N` agents and may also be passed to `--since T` for time-range follow-ups.
+`<uuid>` is the resolved session's UUID; `<L>` is its `lastLine` at the moment the read completed; `<T>` is the active stream segment's mtime (float seconds since epoch) — the wall-clock time of the most recent byte written. Heartbeats touch only the idx file, never the stream, so `<T>` reflects real write activity (partial-line bytes included). `<B>` is the cumulative byte cursor — where `tail -c +B` would resume from. Agents using `-n +N` pass `<L>` as the next cursor and compare `<uuid>` against the previously seen one to detect a NAME selector drifting to a new session — reset the cursor to `0` on UUID change. `<T>` is informational for `-n +N` agents and may also be passed to `--since T` for time-range follow-ups.
 
 Additional stderr lines may precede the trailer, in this order when multiple apply:
 
@@ -108,20 +109,20 @@ List available sessions:
 Read output from a live session:
   live tail -vn +<N> <SELECTOR>
 
-<N>: line number to continue
 <SELECTOR>: UUID prefix or NAME (newest match)
+<N>: line number
 
 stdout: command stdout+stderr lines with n>N
 stderr: live verbose output
-  trailer: "live: id=<uuid> at-line=<L> at-time=<T>"
+  trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
   stop:    "live: exit-code=" or "live: exit=inconsistent"
-  hung:    "live: status=hung last-activity=<s>" (still alive, just stalled)
+  hung:    "live: status=hung last-activity=<s>" (alive, but stalled)
   gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
   partial: "live: partial-line bytes=<k> age=<s>"
 
-To resume reading: next <N> = <L>; reset <N>=0 if <uuid> changes
+Begin reading from +0. Continue reading with: next +<N> = <L>; reset <N>=0 if <uuid> changes (new session)
 
-Pipe output from `live tail` to other tools like `grep`.
+Pipe output from `live tail` and `live cat` to tools like `grep`.
 ```
 
 ## On-disk layout

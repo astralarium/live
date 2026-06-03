@@ -30,7 +30,7 @@ _live_complete() {
     done
 
     if [ -z "$verb" ]; then
-        COMPREPLY=( $(compgen -W "run ls cat tail rm llms.txt completion" -- "$cur") )
+        COMPREPLY=( $(compgen -W "run ls cat head tail rm llms.txt completion" -- "$cur") )
         return
     fi
 
@@ -63,6 +63,13 @@ _live_complete() {
         cat)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
+            fi
+            ;;
+        head)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw -n --lines -c --bytes" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
@@ -147,6 +154,16 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '1:selector:_live_selectors'
                     ;;
+                head)
+                    _arguments \
+                        '(-v --verbose)'{-v,--verbose} \
+                        '(-g --global)'{-g,--global} \
+                        '(--strip-ansi --raw)--strip-ansi' \
+                        '(--strip-ansi --raw)--raw' \
+                        '(-n --lines)'{-n+,--lines=}':lines:' \
+                        '(-c --bytes)'{-c+,--bytes=}':bytes:' \
+                        '1:selector:_live_selectors'
+                    ;;
                 tail)
                     _arguments \
                         '(-v --verbose)'{-v,--verbose} \
@@ -180,6 +197,7 @@ _live_verbs() {
         'run:Wrap <cmd> under a PTY and record'
         'ls:List sessions in scope'
         'cat:Concatenate stream.*.log for a session'
+        'head:Head first lines of a session'
         'tail:Tail a session'
         'rm:Delete sessions'
         'llms.txt:Print a token-minimal agent guide'
@@ -227,19 +245,20 @@ function __live_selectors
     live ls $args --json 2>/dev/null | string match -rga '"(?:id|name)":"([^"]+)"' | sort -u
 end
 
-set -l verbs run ls cat tail rm llms.txt completion
+set -l verbs run ls cat head tail rm llms.txt completion
 
 complete -c live -f
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Wrap <cmd> under a PTY'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a ls -d 'List sessions'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a cat -d 'Concatenate stream.*.log'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a head -d 'Head first lines of a session'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail a session'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent guide'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
 
-# Selector completion for ls / cat / tail / rm.
-complete -c live -n "__fish_seen_subcommand_from ls cat tail rm" -a "(__live_selectors)"
+# Selector completion for ls / cat / head / tail / rm.
+complete -c live -n "__fish_seen_subcommand_from ls cat head tail rm" -a "(__live_selectors)"
 
 # ls
 complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited sessions'
@@ -251,6 +270,14 @@ complete -c live -n "__fish_seen_subcommand_from cat" -s v -l verbose -d 'Add st
 complete -c live -n "__fish_seen_subcommand_from cat" -s g -l global -d 'Resolve selector globally'
 complete -c live -n "__fish_seen_subcommand_from cat" -l strip-ansi -d 'Remove ANSI escapes'
 complete -c live -n "__fish_seen_subcommand_from cat" -l raw -d 'Keep ANSI escapes'
+
+# head
+complete -c live -n "__fish_seen_subcommand_from head" -s v -l verbose
+complete -c live -n "__fish_seen_subcommand_from head" -s g -l global -d 'Resolve selector globally'
+complete -c live -n "__fish_seen_subcommand_from head" -l strip-ansi
+complete -c live -n "__fish_seen_subcommand_from head" -l raw
+complete -c live -n "__fish_seen_subcommand_from head" -s n -l lines -r -d 'First N lines (default 10)'
+complete -c live -n "__fish_seen_subcommand_from head" -s c -l bytes -r -d 'First K bytes'
 
 # tail
 complete -c live -n "__fish_seen_subcommand_from tail" -s v -l verbose

@@ -15,6 +15,7 @@ from .lock import kill_pid, probe_held, read_lock_pid
 from .reader import (
     ReadResult,
     cat_all,
+    head_first,
     lines_since,
     lines_since_time,
     should_strip_ansi,
@@ -74,7 +75,8 @@ def _emit_read_result(
     elif info.status == "inconsistent":
         print("live: exit=inconsistent", file=sys.stderr)
     print(
-        f"live: id={info.id} at-line={result.last_line} at-time={result.at_time:.3f}",
+        f"live: id={info.id} at-line={result.last_line}"
+        f" at-time={result.at_time:.3f} at-byte={result.at_byte}",
         file=sys.stderr,
     )
 
@@ -181,6 +183,21 @@ def cmd_cat(args) -> int:
         return 2
     info, cfg = res
     result = cat_all(info.path)
+    strip = should_strip_ansi(
+        explicit_strip=args.strip_ansi,
+        explicit_raw=args.raw,
+        stdout_is_tty=sys.stdout.isatty(),
+    )
+    _emit_read_result(result, info, cfg, verbose=args.verbose, strip=strip)
+    return 0
+
+
+def cmd_head(args) -> int:
+    res = _get_session_or_fail(args.selector, _scope_filter(args))
+    if res is None:
+        return 2
+    info, cfg = res
+    result = head_first(info.path, n_lines=args.lines, c_bytes=args.bytes_)
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
@@ -329,20 +346,20 @@ List available sessions:
 Read output from a live session:
   live tail -vn +<N> <SELECTOR>
 
-<N>: line number to continue
 <SELECTOR>: UUID prefix or NAME (newest match)
+<N>: line number
 
 stdout: command stdout+stderr lines with n>N
 stderr: live verbose output
-  trailer: "live: id=<uuid> at-line=<L> at-time=<T>"
+  trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
   stop:    "live: exit-code=" or "live: exit=inconsistent"
-  hung:    "live: status=hung last-activity=<s>" (still alive, just stalled)
+  hung:    "live: status=hung last-activity=<s>" (alive, but stalled)
   gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
   partial: "live: partial-line bytes=<k> age=<s>"
 
-To resume reading: next <N> = <L>; reset <N>=0 if <uuid> changes
+Begin reading from +0. Continue reading with: next +<N> = <L>; reset <N>=0 if <uuid> changes (new session)
 
-Pipe output from `live tail` to other tools like `grep`.
+Pipe output from `live tail` and `live cat` to tools like `grep`.
 """
 
 

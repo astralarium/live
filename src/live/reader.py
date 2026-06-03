@@ -121,6 +121,7 @@ class ReadResult:
     first_line: int  # first n actually emitted (0 if none)
     last_line: int  # cursor for the trailer (lastLine at read completion)
     at_time: float  # wall-clock time of last write (active stream mtime); 0.0 if no segment
+    at_byte: int  # cumulative byte cursor (where -c +B would resume)
     dropped: int  # k lines dropped (gap)
     first_retained: int  # firstLine of session at read time
     partial_bytes: int  # k bytes in partial-line tail
@@ -144,6 +145,20 @@ def at_time_of(session_dir: Path) -> float:
         return 0.0
 
 
+def at_byte_of(session_dir: Path) -> int:
+    """Cumulative byte count across all stream segments (partial bytes included).
+    Returns 0 if no segments exist. This is the cursor where `tail -c +B` would
+    resume."""
+    refs = segment_refs(session_dir)
+    total = 0
+    for ref in refs:
+        try:
+            total += os.path.getsize(ref.stream_path)
+        except FileNotFoundError:
+            pass
+    return total
+
+
 def lines_since(
     session_dir: Path,
     *,
@@ -152,7 +167,7 @@ def lines_since(
     """Read lines with n > since. Includes any partial-line tail in stdout."""
     refs = segment_refs(session_dir)
     if not refs:
-        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0.0, None)
+        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
 
     # Compute firstLine/lastLine, decide gap.
     first_line = 0
@@ -226,6 +241,7 @@ def lines_since(
         first_line=emit_from,
         last_line=last_line,
         at_time=at_time,
+        at_byte=at_byte_of(session_dir),
         dropped=dropped,
         first_retained=first_line,
         partial_bytes=partial_bytes,
@@ -243,7 +259,7 @@ def lines_since_time(session_dir: Path, *, since_t: float) -> ReadResult:
     """Read lines whose idx timestamp `t > since_t`. Includes partial-line tail."""
     refs = segment_refs(session_dir)
     if not refs:
-        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0.0, None)
+        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
 
     first_line = 0
     for ref in refs:
@@ -297,11 +313,61 @@ def lines_since_time(session_dir: Path, *, since_t: float) -> ReadResult:
         first_line=0,
         last_line=last_line,
         at_time=at_time,
+        at_byte=at_byte_of(session_dir),
         dropped=0,
         first_retained=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         partial_seg=partial_seg,
+    )
+
+
+def head_first(
+    session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
+) -> ReadResult:
+    """Head the first N lines or first K bytes (excluding partial tail).
+
+    Mirror of `tail_last`. Default N=10 to match Unix `head`. `last_line` in the
+    trailer points to the last fully-emitted line — `tail -vn +L` resumes there.
+    """
+    result = cat_all(session_dir)
+    body = result.stdout
+    if result.partial_bytes:
+        body = body[: -result.partial_bytes]
+
+    first_n = result.first_retained or 0
+
+    if c_bytes is not None:
+        body = body[:c_bytes] if c_bytes < len(body) else body
+    else:
+        keep = 10 if n_lines is None else n_lines
+        if keep <= 0:
+            body = b""
+        else:
+            count = 0
+            i = 0
+            while i < len(body) and count < keep:
+                j = body.find(b"\n", i)
+                if j < 0:
+                    break
+                count += 1
+                i = j + 1
+            body = body[:i]
+
+    emitted = body.count(b"\n")
+    last_line = (first_n + emitted - 1) if (first_n and emitted) else 0
+    return ReadResult(
+        stdout=body,
+        stderr_lines=result.stderr_lines,
+        first_line=first_n if emitted else 0,
+        last_line=last_line,
+        at_time=result.at_time,
+        at_byte=len(body),
+        dropped=result.dropped,
+        first_retained=first_n,
+        partial_bytes=0,
+        partial_age=0.0,
+        partial_seg=None,
     )
 
 
@@ -344,6 +410,7 @@ def tail_last(
         dropped=result.dropped,
         first_retained=result.first_retained,
         at_time=result.at_time,
+        at_byte=result.at_byte,
         partial_bytes=result.partial_bytes,
         partial_age=result.partial_age,
         partial_seg=result.partial_seg,

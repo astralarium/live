@@ -66,6 +66,25 @@ def _make_parser() -> argparse.ArgumentParser:
     cat_p.add_argument("selector")
     cat_p.set_defaults(func=verbs.cmd_cat)
 
+    # head
+    head_p = sub.add_parser("head", help="Head session.")
+    head_p.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose output (for agents).")
+    head_p.add_argument("-g", "--global", action="store_true", dest="global_",
+                        help="Global directory scope.")
+    ag = head_p.add_mutually_exclusive_group()
+    ag.add_argument("--strip-ansi", action="store_true", dest="strip_ansi",
+                    help="Remove ANSI escapes.")
+    ag.add_argument("--raw", action="store_true", dest="raw",
+                    help="Keep ANSI escapes.")
+    mode = head_p.add_mutually_exclusive_group()
+    mode.add_argument("-n", "--lines", type=int, default=None,
+                      help="First N lines (default 10).")
+    mode.add_argument("-c", "--bytes", dest="bytes_", type=int, default=None,
+                      help="First K bytes.")
+    head_p.add_argument("selector")
+    head_p.set_defaults(func=verbs.cmd_head)
+
     # tail
     tail_p = sub.add_parser("tail", help="Tail session.")
     tail_p.add_argument("-f", "--follow", action="store_true",

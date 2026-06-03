@@ -17,6 +17,7 @@ from .format import (
 )
 from .lock import probe_held
 from .reader import (
+    at_byte_of,
     at_time_of,
     lines_in_segment,
     partial_tail_bytes,
@@ -198,11 +199,13 @@ def _emit_exit_trailer(
 ) -> None:
     info = session_info(session_dir, cfg)
     at_time = at_time_of(session_dir)
+    at_byte = at_byte_of(session_dir)
     if info is not None and info.status == "exited" and info.exit_code is not None:
         print(f"live: exit-code={info.exit_code}", file=sys.stderr)
     elif info is not None and info.status == "inconsistent":
         print("live: exit=inconsistent", file=sys.stderr)
     print(
-        f"live: id={session_id} at-line={cursor} at-time={at_time:.3f}",
+        f"live: id={session_id} at-line={cursor}"
+        f" at-time={at_time:.3f} at-byte={at_byte}",
         file=sys.stderr,
     )
