@@ -11,7 +11,7 @@ import os
 import re
 import struct
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -100,34 +100,19 @@ def read_meta(session_dir: Path) -> Meta | None:
         return None
 
 
-@dataclass(frozen=True)
-class Segments:
-    """Enumerated stream segments. Numbers come from `stream.*.log`; idx may lag."""
-
-    nums: list[int] = field(default_factory=list)
-
-    @property
-    def first(self) -> int | None:
-        return self.nums[0] if self.nums else None
-
-    @property
-    def last(self) -> int | None:
-        return self.nums[-1] if self.nums else None
-
-
-def list_segments(session_dir: Path) -> Segments:
-    """List stream segment numbers, sorted ascending."""
+def list_segments(session_dir: Path) -> list[int]:
+    """Stream segment numbers from `stream.*.log`, sorted ascending."""
     try:
         entries = os.listdir(session_dir)
     except FileNotFoundError:
-        return Segments([])
+        return []
     nums: list[int] = []
     for name in entries:
         m = _STREAM_RE.match(name)
         if m:
             nums.append(int(m.group(1)))
     nums.sort()
-    return Segments(nums)
+    return nums
 
 
 def count_complete_lines(stream_path: Path) -> int:
@@ -188,25 +173,25 @@ class Watermarks:
 
 def compute_watermarks(session_dir: Path) -> Watermarks:
     segs = list_segments(session_dir)
-    if segs.first is None:
+    if not segs:
         return Watermarks(0, 0, 0, 0, 0)
 
     first_n = 0
-    for seg in segs.nums:
+    for seg in segs:
         rec = first_idx_record(session_dir / idx_name(seg))
         if rec is not None:
             first_n = rec[0]
             break
 
     last_n = 0
-    for seg in reversed(segs.nums):
+    for seg in reversed(segs):
         rec = last_idx_record(session_dir / idx_name(seg))
         if rec is not None:
             last_n = rec[0]
             break
 
     count = last_n - first_n + 1 if last_n else 0
-    return Watermarks(segs.first, segs.last, first_n, last_n, count)
+    return Watermarks(segs[0], segs[-1], first_n, last_n, count)
 
 
 def read_idx_records(idx_path: Path) -> list[tuple[int, int]]:

@@ -24,8 +24,7 @@ from .format import (
     stream_name,
 )
 from .lock import probe_held
-from .paths import sessions_dir as _sessions_dir
-from .paths import within_cwd
+from .paths import sessions_dir, within_cwd
 
 
 @dataclass
@@ -55,7 +54,7 @@ def _verdict_inconsistent(session_dir: Path) -> bool:
     Equal counts -> consistent (False).
     Any drift -> inconsistent (True). Missing idx counts as 0 records.
     """
-    segs = list_segments(session_dir).nums
+    segs = list_segments(session_dir)
     if not segs:
         return False
     last_seg = segs[-1]
@@ -106,7 +105,7 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
 
 
 def sweep_all(cfg: Config) -> None:
-    sdir = _sessions_dir()
+    sdir = sessions_dir()
     try:
         entries = list(os.scandir(sdir))
     except FileNotFoundError:
@@ -124,7 +123,7 @@ def status_of(session_dir: Path, cfg: Config) -> str:
     held = probe_held(lock_path)
     if held:
         # Live; check staleness for "hung".
-        segs = list_segments(session_dir).nums
+        segs = list_segments(session_dir)
         last_act = 0.0
         if segs:
             try:
@@ -155,7 +154,7 @@ def session_info(session_dir: Path, cfg: Config) -> SessionInfo | None:
     if meta is None:
         return None  # starting / malformed; skip
     wm = compute_watermarks(session_dir)
-    segs = list_segments(session_dir).nums
+    segs = list_segments(session_dir)
     last_activity = 0.0
     if segs:
         try:
@@ -200,7 +199,7 @@ def list_sessions(
 ) -> list[SessionInfo]:
     """List sessions newest-first. If `cwd_filter` is set, keep only sessions
     whose `meta.cwd` is `cwd_filter` or a descendant."""
-    sdir = _sessions_dir()
+    sdir = sessions_dir()
     out: list[SessionInfo] = []
     try:
         entries = list(os.scandir(sdir))

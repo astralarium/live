@@ -57,7 +57,7 @@ def follow_session(
     watcher = new_watcher()
     try:
         watcher.add_path(session_dir)
-        active_seg = list_segments(session_dir).nums
+        active_seg = list_segments(session_dir)
         active_idx_path: Path | None = None
         if active_seg:
             active_idx_path = session_dir / idx_name(active_seg[-1])
@@ -78,7 +78,7 @@ def follow_session(
                 break
 
             # Detect rotation: new highest segment appearing in the directory.
-            segs = list_segments(session_dir).nums
+            segs = list_segments(session_dir)
             if not segs:
                 # Session dir gone or empty -> recorder probably tore down.
                 break
@@ -139,7 +139,7 @@ def _emit_new_lines(
     partial_seg: int | None,
 ) -> tuple[int, int, int | None]:
     """Emit content past (cursor, partial_emitted on partial_seg). Returns updated state."""
-    segs = list_segments(session_dir).nums
+    segs = list_segments(session_dir)
     new_cursor = cursor
     new_partial_emitted = partial_emitted
     new_partial_seg = partial_seg

@@ -61,7 +61,7 @@ class SegmentRef:
 
 
 def segment_refs(session_dir: Path) -> list[SegmentRef]:
-    segs = list_segments(session_dir).nums
+    segs = list_segments(session_dir)
     return [
         SegmentRef(
             seg=s,

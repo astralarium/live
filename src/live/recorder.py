@@ -380,7 +380,7 @@ class _Recorder:
 
     def _retain(self) -> None:
         max_bytes = self.cfg.max_bytes
-        segs = list_segments(self.dir).nums
+        segs = list_segments(self.dir)
         if not segs:
             return
         total = 0
