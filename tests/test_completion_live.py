@@ -279,6 +279,65 @@ printf '%s\\n' "${{COMPREPLY[@]}}"
             proc.wait(timeout=5)
 
 
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_numeric_values_dont_break_selector_completion(
+    run_live, live_env, tmp_path: Path
+) -> None:
+    """`live head -n -3 <TAB>` (and friends) must still complete selectors.
+    Regression: the `-3` token must not be mistaken for a flag during dispatch."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    shim = bin_dir / "live"
+    shim.write_text(f'#!/bin/sh\nexec {sys.executable} -m live.cli "$@"\n')
+    shim.chmod(0o755)
+    import os
+    test_env = dict(live_env)
+    test_env["PATH"] = f"{bin_dir}{os.pathsep}{test_env.get('PATH', '')}"
+
+    run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
+
+    script = run_live(tmp_path, "completion", "bash").stdout
+    payload = tmp_path / "live.bash"
+    payload.write_text(script)
+
+    def drive(words_tuple: tuple[str, ...], cword: int) -> set[str]:
+        # Render COMP_WORDS verbatim — each token in its own quoted slot.
+        words_bash = " ".join(f'"{w}"' for w in words_tuple)
+        comp_line = " ".join(words_tuple)
+        drive_script = f"""
+set +e
+source {payload}
+COMP_WORDS=({words_bash})
+COMP_CWORD={cword}
+COMP_LINE="{comp_line}"
+COMP_POINT=${{#COMP_LINE}}
+_live_complete 2>/dev/null
+printf '%s\\n' "${{COMPREPLY[@]}}"
+"""
+        out = subprocess.run(
+            ["bash", "-c", drive_script],
+            capture_output=True, text=True, check=True,
+            env=test_env, cwd=str(tmp_path),
+        ).stdout
+        return {ln for ln in out.split() if ln}
+
+    # `live head -n -3 <TAB>` — cur=""; expect selectors offered, not flags.
+    head_minus = drive(("live", "head", "-n", "-3", ""), cword=4)
+    assert "target" in head_minus, head_minus
+
+    # `live head -n +3 <TAB>` — noop sign on head; still selectors.
+    head_plus = drive(("live", "head", "-n", "+3", ""), cword=4)
+    assert "target" in head_plus, head_plus
+
+    # `live tail -c +5 <TAB>` — byte cursor; still selectors.
+    tail_plus = drive(("live", "tail", "-c", "+5", ""), cword=4)
+    assert "target" in tail_plus, tail_plus
+
+    # `live tail -c -5 <TAB>` — noop sign on tail; still selectors.
+    tail_minus = drive(("live", "tail", "-c", "-5", ""), cword=4)
+    assert "target" in tail_minus, tail_minus
+
+
 @pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")
 def test_zsh_script_parses_cleanly(run_live, tmp_path: Path) -> None:
     """Catch bash-isms / syntax errors that autoload would otherwise defer."""

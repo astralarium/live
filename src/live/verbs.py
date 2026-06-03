@@ -14,7 +14,9 @@ from .config import Config, load_config
 from .lock import kill_pid, probe_held, read_lock_pid
 from .reader import (
     ReadResult,
+    bytes_since,
     cat_all,
+    head_drop_last,
     head_first,
     lines_since,
     lines_since_time,
@@ -198,10 +200,25 @@ def cmd_head(args) -> int:
     if res is None:
         return 2
     info, cfg = res
-    if args.time is not None:
+
+    # args.lines / args.bytes_ are None or ("count" | "cursor", int).
+    n_kind, n_val = args.lines if args.lines is not None else (None, None)
+    c_kind, c_val = args.bytes_ if args.bytes_ is not None else (None, None)
+
+    if n_kind == "cursor":
+        # GNU `head -n -K`: drop the last K lines.
+        result = head_drop_last(info.path, n_lines=n_val)
+    elif c_kind == "cursor":
+        # GNU `head -c -K`: drop the last K bytes.
+        result = head_drop_last(info.path, c_bytes=c_val)
+    elif args.time is not None:
         result = lines_until_time(info.path, until_t=args.time)
     else:
-        result = head_first(info.path, n_lines=args.lines, c_bytes=args.bytes_)
+        result = head_first(
+            info.path,
+            n_lines=n_val if n_kind == "count" else None,
+            c_bytes=c_val if c_kind == "count" else None,
+        )
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
         explicit_raw=args.raw,
@@ -217,26 +234,29 @@ def cmd_tail(args) -> int:
         return 2
     info, cfg = res
 
-    # args.lines is None or a (kind, int) tuple from _lines_arg.
-    since_n: int | None = None
-    n_lines: int | None = None
-    if args.lines is not None:
-        kind, n = args.lines
-        if kind == "since":
-            since_n = n
-        else:
-            n_lines = n
+    # args.lines / args.bytes_ are None or ("count" | "cursor", int).
+    n_kind, n_val = args.lines if args.lines is not None else (None, None)
+    c_kind, c_val = args.bytes_ if args.bytes_ is not None else (None, None)
 
-    is_line_cursor = since_n is not None
+    is_line_cursor = n_kind == "cursor"
+    is_byte_cursor = c_kind == "cursor"
     is_time_cursor = args.time is not None
     # Mutual exclusivity (-n / -c / -t) is enforced by argparse.
 
     verbose = args.verbose
     if is_line_cursor:
-        result = lines_since(info.path, since=since_n)
-        if since_n > result.last_line and result.last_line:
+        result = lines_since(info.path, since=n_val)
+        # Caught-up polls (n_val == last_line + 1) are silent. Warn only when
+        # the cursor is multiple lines past the session's lastLine.
+        if n_val > result.last_line + 1 and result.last_line:
             result.stderr_lines.append(
-                f"since={since_n} > at-line={result.last_line}; check id"
+                f"since={n_val} > at-line={result.last_line}; check id"
+            )
+    elif is_byte_cursor:
+        result = bytes_since(info.path, since=c_val)
+        if c_val > result.at_byte and result.at_byte:
+            result.stderr_lines.append(
+                f"bytes={c_val} > at-byte={result.at_byte}; check id"
             )
     elif is_time_cursor:
         result = lines_since_time(info.path, since_t=args.time)
@@ -245,7 +265,11 @@ def cmd_tail(args) -> int:
                 f"time={args.time:.3f} > at-time={result.at_time:.3f}; check id"
             )
     else:
-        result = tail_last(info.path, n_lines=n_lines, c_bytes=args.bytes_)
+        result = tail_last(
+            info.path,
+            n_lines=n_val if n_kind == "count" else None,
+            c_bytes=c_val if c_kind == "count" else None,
+        )
 
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
@@ -353,7 +377,7 @@ Read output from a live session:
 <SELECTOR>: UUID prefix or NAME (newest match)
 <N>: line number
 
-stdout: command stdout+stderr lines with n>N
+stdout: command stdout+stderr lines with n>=N
 stderr: live verbose output
   trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
   stop:    "live: exit-code=" or "live: exit=inconsistent"
@@ -361,7 +385,7 @@ stderr: live verbose output
   gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
   partial: "live: partial-line bytes=<k> age=<s>"
 
-Begin reading from +0. Continue reading with: next +<N> = <L>; reset <N>=0 if <uuid> changes (new session)
+Begin reading from +0. Continue reading with: next +<N> = <L>+1; reset <N>=0 if <uuid> changes (new session)
 
 Pipe output from `live tail` and `live cat` to tools like `grep`.
 """

@@ -164,7 +164,8 @@ def lines_since(
     *,
     since: int,
 ) -> ReadResult:
-    """Read lines with n > since. Includes any partial-line tail in stdout."""
+    """Read lines with n >= since (Unix `tail -n +N` semantics). Includes any
+    partial-line tail in stdout."""
     refs = segment_refs(session_dir)
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
@@ -185,14 +186,14 @@ def lines_since(
 
     stderr_lines: list[str] = []
     dropped = 0
-    if first_line and since + 1 < first_line:
-        dropped = first_line - since - 1
+    if first_line and since < first_line:
+        dropped = first_line - since
         stderr_lines.append(
             f"dropped {dropped} lines (since={since}, first retained={first_line})"
         )
         emit_from = first_line
     else:
-        emit_from = max(since + 1, first_line) if first_line else 0
+        emit_from = max(since, first_line) if first_line else 0
 
     out = bytearray()
     if first_line and emit_from <= last_line:
@@ -351,6 +352,111 @@ def head_first(
                 if j < 0:
                     break
                 count += 1
+                i = j + 1
+            body = body[:i]
+
+    emitted = body.count(b"\n")
+    last_line = (first_n + emitted - 1) if (first_n and emitted) else 0
+    return ReadResult(
+        stdout=body,
+        stderr_lines=result.stderr_lines,
+        first_line=first_n if emitted else 0,
+        last_line=last_line,
+        at_time=result.at_time,
+        at_byte=len(body),
+        dropped=result.dropped,
+        first_retained=first_n,
+        partial_bytes=0,
+        partial_age=0.0,
+        partial_seg=None,
+    )
+
+
+def bytes_since(session_dir: Path, *, since: int) -> ReadResult:
+    """Read bytes after virtual offset `since` (tail -c +B). Emits raw bytes —
+    may start mid-line. Partial-line bytes in the active stream are included
+    naturally since they're part of the stream segment's size."""
+    refs = segment_refs(session_dir)
+    if not refs:
+        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
+
+    first_line = 0
+    for ref in refs:
+        rec = first_idx_record(ref.idx_path)
+        if rec is not None:
+            first_line = rec[0]
+            break
+    last_line = 0
+    for ref in reversed(refs):
+        rec = last_idx_record(ref.idx_path)
+        if rec is not None:
+            last_line = rec[0]
+            break
+
+    out = bytearray()
+    cumulative = 0
+    for ref in refs:
+        try:
+            size = os.path.getsize(ref.stream_path)
+        except FileNotFoundError:
+            size = 0
+        if cumulative + size <= since:
+            cumulative += size
+            continue
+        offset = max(0, since - cumulative)
+        stream = stream_segment_bytes(ref.stream_path)
+        out.extend(stream[offset:])
+        cumulative += size
+
+    at_time = 0.0
+    try:
+        at_time = os.path.getmtime(refs[-1].stream_path)
+    except FileNotFoundError:
+        at_time = 0.0
+
+    return ReadResult(
+        stdout=bytes(out),
+        stderr_lines=[],
+        first_line=0,
+        last_line=last_line,
+        at_time=at_time,
+        at_byte=cumulative,
+        dropped=0,
+        first_retained=first_line,
+        partial_bytes=0,
+        partial_age=0.0,
+        partial_seg=None,
+    )
+
+
+def head_drop_last(
+    session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
+) -> ReadResult:
+    """GNU `head -n -K` / `-c -K`: emit everything except the last K lines (or
+    K bytes). Partial-line tail excluded."""
+    result = cat_all(session_dir)
+    body = result.stdout
+    if result.partial_bytes:
+        body = body[: -result.partial_bytes]
+
+    first_n = result.first_retained or 0
+
+    if c_bytes is not None:
+        if c_bytes >= len(body):
+            body = b""
+        elif c_bytes > 0:
+            body = body[:-c_bytes]
+    else:
+        drop = n_lines or 0
+        if drop > 0:
+            i = len(body)
+            count = 0
+            while i > 0 and count < drop:
+                j = body.rfind(b"\n", 0, i - 1) if i >= 1 else -1
+                count += 1
+                if j < 0:
+                    i = 0
+                    break
                 i = j + 1
             body = body[:i]
 

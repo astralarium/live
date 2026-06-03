@@ -46,6 +46,39 @@ def test_head_verbose_trailer_carries_cursor(project: Path, run_live) -> None:
     assert int(m.group(1)) == 28
 
 
+def test_head_n_minus_drops_last_k(project: Path, run_live) -> None:
+    """`head -n -K` matches GNU: all lines except the last K."""
+    sel = _setup_session(project, run_live)  # 10 lines: line1..line10
+    out = run_live(project, "head", "-n", "-3", sel).stdout.replace("\r", "")
+    assert out.splitlines() == [f"line{i}" for i in range(1, 8)]  # drop last 3
+
+
+def test_head_n_minus_K_ge_total_is_empty(project: Path, run_live) -> None:
+    """Drop count >= total lines yields empty output."""
+    sel = _setup_session(project, run_live)
+    out = run_live(project, "head", "-n", "-99", sel).stdout
+    assert out == ""
+
+
+def test_head_c_minus_drops_last_k_bytes(project: Path, run_live) -> None:
+    """`head -c -K` matches GNU: all bytes except the last K."""
+    sel = _setup_session(project, run_live)
+    full = run_live(project, "cat", sel).stdout.encode("utf-8", "replace")
+    out = run_live(project, "head", "-c", "-5", sel).stdout.encode("utf-8", "replace")
+    # Both strings have collapsed \r\n -> \n via text-mode subprocess. Match on
+    # text-collapsed length: full minus 5 less than disk would be (off by \r count)
+    # — but at minimum, output must be shorter than full.
+    assert len(out) < len(full)
+    assert full.startswith(out)
+
+
+def test_head_n_plus_treated_as_count(project: Path, run_live) -> None:
+    """`head -n +N` is a no-op sign — same as `-n N`."""
+    sel = _setup_session(project, run_live)
+    out = run_live(project, "head", "-n", "+3", sel).stdout.replace("\r", "")
+    assert out.splitlines() == ["line1", "line2", "line3"]
+
+
 def test_head_t_complements_tail_t(project: Path, run_live) -> None:
     """head -t T and tail -t T should partition the session at cursor T."""
     run_live(

@@ -9,17 +9,26 @@ from . import __version__
 from . import verbs
 
 
-def _lines_arg(value: str) -> tuple[str, int]:
-    """Parse `-n` / `--lines`: either `N` (last N lines) or `+N` (lines with n > N)."""
-    if value.startswith("+"):
-        rest = value[1:]
-        if rest.isdigit():
-            return ("since", int(rest))
-    elif value.isdigit():
-        return ("last", int(value))
-    raise argparse.ArgumentTypeError(
-        f"expected N or +N (got {value!r})"
-    )
+def _count_or_cursor(prefix: str):
+    """Build a parser for `N` (count) or `<prefix>N` (cursor) on `-n` / `-c`.
+
+    `tail` uses `+N` (cursor walks forward from N); `head` uses `-N` (cursor
+    walks back from N). The opposite sign is accepted but treated as count —
+    matches Unix `head -n +5` and `tail -n -5` semantics.
+    """
+    def parse(value: str) -> tuple[str, int]:
+        if value.startswith(prefix):
+            rest = value[1:]
+            if rest.isdigit():
+                return ("cursor", int(rest))
+        elif value.startswith(("+", "-")) and value[1:].isdigit():
+            return ("count", int(value[1:]))
+        elif value.isdigit():
+            return ("count", int(value))
+        raise argparse.ArgumentTypeError(
+            f"expected N or {prefix}N (got {value!r})"
+        )
+    return parse
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -78,10 +87,10 @@ def _make_parser() -> argparse.ArgumentParser:
     ag.add_argument("--raw", action="store_true", dest="raw",
                     help="Keep ANSI escapes.")
     mode = head_p.add_mutually_exclusive_group()
-    mode.add_argument("-n", "--lines", type=int, default=None,
-                      help="First N lines (default 10).")
-    mode.add_argument("-c", "--bytes", dest="bytes_", type=int, default=None,
-                      help="First K bytes.")
+    mode.add_argument("-n", "--lines", type=_count_or_cursor("-"), default=None,
+                      help="First N lines (default 10), or -N to drop the last N lines (GNU head).")
+    mode.add_argument("-c", "--bytes", dest="bytes_", type=_count_or_cursor("-"), default=None,
+                      help="First K bytes, or -K to drop the last K bytes (GNU head).")
     mode.add_argument("-t", "--time", type=float, default=None,
                       help="Lines with index timestamp <= T (epoch seconds).")
     head_p.add_argument("selector")
@@ -101,10 +110,10 @@ def _make_parser() -> argparse.ArgumentParser:
     ag.add_argument("--raw", action="store_true", dest="raw",
                     help="Keep ANSI escapes.")
     mode = tail_p.add_mutually_exclusive_group()
-    mode.add_argument("-n", "--lines", type=_lines_arg, default=None,
-                      help="Last N lines, or +N for lines with n > N (resumable polling).")
-    mode.add_argument("-c", "--bytes", dest="bytes_", type=int, default=None,
-                      help="Last K bytes.")
+    mode.add_argument("-n", "--lines", type=_count_or_cursor("+"), default=None,
+                      help="Last N lines, or +N for lines with n >= N (Unix tail; resumable polling).")
+    mode.add_argument("-c", "--bytes", dest="bytes_", type=_count_or_cursor("+"), default=None,
+                      help="Last K bytes, or +B for bytes after virtual offset B (resumable).")
     mode.add_argument("-t", "--time", type=float, default=None,
                       help="Lines with index timestamp > T (epoch seconds).")
     tail_p.add_argument("selector")

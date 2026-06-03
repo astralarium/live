@@ -33,7 +33,8 @@ def test_full_cycle(project: Path, run_live) -> None:
     text = cat.stdout.replace("\r", "")
     assert "one\ntwo\nthree\n" in text
 
-    since = run_live(project, "tail", "-vn", "+1", "smoke")
+    # Unix tail: `+2` starts at line 2 (inclusive), skipping line 1 ("one").
+    since = run_live(project, "tail", "-vn", "+2", "smoke")
     text = since.stdout.replace("\r", "")
     assert "two" in text and "three" in text
     assert "one" not in text.split("\n", 1)[0]
@@ -51,3 +52,23 @@ def test_full_cycle(project: Path, run_live) -> None:
     assert rm.returncode == 0
     ls_after = run_live(project, "ls", "-a", "--json")
     assert ls_after.stdout.strip() == ""
+
+
+def test_tail_n_plus_is_inclusive_unix_semantics(project: Path, run_live) -> None:
+    """`tail -n +N` emits lines with n >= N (Unix); `+1` returns all lines."""
+    run_live(project, "run", "-n", "u", "--", "sh", "-c",
+             "echo a; echo b; echo c")
+    # +1 is inclusive -> all three lines.
+    out = run_live(project, "tail", "-n", "+1", "u").stdout.replace("\r", "")
+    assert out.splitlines() == ["a", "b", "c"]
+    # +3 emits only line 3.
+    out = run_live(project, "tail", "-n", "+3", "u").stdout.replace("\r", "")
+    assert out.splitlines() == ["c"]
+    # +4 is "caught up" (one past lastLine=3): empty, no warning.
+    caught = run_live(project, "tail", "-vn", "+4", "u")
+    assert caught.stdout == ""
+    assert "check id" not in caught.stderr
+    # +5 is genuinely ahead: empty + warning.
+    ahead = run_live(project, "tail", "-vn", "+5", "u")
+    assert ahead.stdout == ""
+    assert "since=5 > at-line=3" in ahead.stderr
