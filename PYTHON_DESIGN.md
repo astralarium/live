@@ -246,7 +246,7 @@ Without `-f`, `rm` prints an error and continues with the next selector.
 
 Any `.live/` may carry its own `config.json` to override fields. Per-field layering: per-`.live/` over home over compiled defaults. Partial files are valid.
 
-Validation via `pydantic.BaseModel` with `ConfigDict(extra="ignore")`: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all finite.
+Validation is a hand-rolled pass over the parsed JSON: `ttlDays >= 0`, `maxKb > 0`, `segmentKb > 0`, `heartbeatSec > 0`, all integers. Unknown keys ignored; out-of-range or wrong-typed fields fall back to the layer below.
 
 - Malformed per-project config: log + ignore.
 - Malformed home config: warn and fall back to defaults.
@@ -271,7 +271,7 @@ live completion fish > ~/.config/fish/completions/live.fish
 
 Python 3.14+. `pyproject.toml` with `hatchling`, `[project.scripts] live = "live.cli:main"`. PyPI: `astralarya-live`. Install via `pipx install astralarya-live` or `uv tool install astralarya-live`.
 
-One dependency: `pydantic` v2 for config validation. PTY, flock, ioctl, signals, atomic rename, struct packing, and UUIDv7 are all stdlib. No native build step.
+Zero runtime dependencies. PTY, flock, ioctl, signals, atomic rename, struct packing, JSON parsing, and UUIDv7 are all stdlib. No native build step.
 
 ## Defaults
 
