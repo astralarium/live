@@ -142,15 +142,22 @@ def cmd_ls(args) -> int:
             print(json.dumps(obj, separators=(",", ":")))
         return 0
 
-    # Human columns.
+    # Human columns: header + equal-width fields (last column unpadded).
     if not sessions:
         return 0
-    for s in sessions:
-        id_prefix = s.id[:8]
-        status = s.status
-        name = s.meta.name or "-"
-        command = " ".join(s.meta.command)
-        print(f"{id_prefix}  {status:11s}  {name}  {command}")
+    headers = ("ID", "STATUS", "NAME", "COMMAND")
+    rows = [
+        (s.id[:8], s.status, s.meta.name or "-", " ".join(s.meta.command))
+        for s in sessions
+    ]
+    widths = [
+        max(len(headers[i]), max(len(r[i]) for r in rows))
+        for i in range(len(headers) - 1)
+    ]
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths) + "  {}"
+    print(fmt.format(*headers))
+    for r in rows:
+        print(fmt.format(*r))
     return 0
 
 
