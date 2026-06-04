@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 
 from live.config import Config
-from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME
-from live.sweep import sweep_one
+from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME, Meta, Watermarks
+from live.sweep import SessionInfo, sweep_one
+from live.verbose import emit_exit
 
 
 def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
@@ -79,6 +80,50 @@ def test_sweep_skips_session_without_lock_file(tmp_path: Path) -> None:
     # No process.lock at all -> sweep treats as starting and leaves it alone.
     sweep_one(sess, _cfg())
     assert not (sess / DEAD_NAME).exists()
+
+
+# ----- exit-status helper -----
+
+
+def _mk_info(status: str, exit_code: int | None) -> SessionInfo:
+    return SessionInfo(
+        id="x",
+        path=Path("/x"),
+        meta=Meta(id="x", command=["sh"], cwd="/", started_at=0.0),
+        status=status,
+        watermarks=Watermarks(0, 0, 0, 0, 0),
+        last_activity=0.0,
+        exited_at=None,
+        exit_code=exit_code,
+    )
+
+
+def test_emit_exit_inconsistent_with_known_exit_code(capsys) -> None:
+    """Race: recorder wrote meta with exit_code before crashing; sweeper later
+    stamped deadAt inconsistent. Both lines should surface."""
+    emit_exit(_mk_info("inconsistent", exit_code=42))
+    err = capsys.readouterr().err
+    assert "live: exit=inconsistent" in err
+    assert "live: exit-code=42" in err
+    # exit=inconsistent precedes exit-code so agents see the warning first.
+    assert err.index("exit=inconsistent") < err.index("exit-code=42")
+
+
+def test_emit_exit_exited(capsys) -> None:
+    emit_exit(_mk_info("exited", exit_code=0))
+    err = capsys.readouterr().err
+    assert err == "live: exit-code=0\n"
+
+
+def test_emit_exit_inconsistent_unknown_exit_code(capsys) -> None:
+    emit_exit(_mk_info("inconsistent", exit_code=None))
+    err = capsys.readouterr().err
+    assert err == "live: exit=inconsistent\n"
+
+
+def test_emit_exit_running_is_silent(capsys) -> None:
+    emit_exit(_mk_info("running", exit_code=None))
+    assert capsys.readouterr().err == ""
 
 
 # ----- rm -f recovery -----

@@ -1,7 +1,8 @@
 """Recorder: PTY-wrap a child command, mirror to stdout, record to disk.
 
-Implements the startup ordering, write-order invariant, idle heartbeat,
-rotation, retention, and graceful-exit paths from DESIGN.md.
+Holds the sole writer flock on `process.lock` for the session's lifetime.
+Stream is always one complete line ahead of the index (prefix invariant);
+heartbeat touches the active idx mtime to surface `hung` vs silent.
 """
 
 from __future__ import annotations
@@ -82,15 +83,10 @@ class _Recorder:
     # ----- startup -----
 
     def setup_session(self) -> None:
-        """Steps 1–5 of Startup order. Step 6 (pty.fork) happens in run()."""
-        # 1. mkdir 0700
+        """Create dir + lock + stream/idx + meta before any reader can see them."""
         self.dir.mkdir(mode=0o700, parents=True, exist_ok=False)
-        # 2. open process.lock and flock
         self.lock_fd = acquire_lock(self.dir / LOCK_NAME, os.getpid())
-        # 3. pid already written by acquire_lock
-        # 4. empty stream/idx pair
         self._open_active_segment(0, create=True)
-        # 5. meta.json atomic
         write_meta_atomic(self.dir, self.meta)
 
     def _open_active_segment(self, seg: int, *, create: bool) -> None:
@@ -107,13 +103,11 @@ class _Recorder:
         stream_path = self.dir / stream_name(seg)
         idx_path = self.dir / idx_name(seg)
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
-        # Spec: at rotation, create stream first, then idx (reader tolerance).
+        # Stream before idx — readers tolerate stream-without-idx, not the inverse.
         self.stream_fd = os.open(str(stream_path), flags, 0o600)
         self.idx_fd = os.open(str(idx_path), flags, 0o600)
         self.active_seg = seg
         self.stream_bytes = os.fstat(self.stream_fd).st_size
-        # Reset partial-line state — rotation only happens at line boundary
-        # so no partial bytes should carry across.
         self.pending_line_start = None
         self.pending_line_bytes = 0
         self.last_idx_touch = time.time()
@@ -122,9 +116,6 @@ class _Recorder:
 
     def run(self) -> int:
         """pty.fork + execvp the child, run the select loop, return child exit code."""
-        if self.cfg is None:
-            raise RuntimeError("config not loaded")
-
         # Seed initial PTY size from stdin's window before fork so the child
         # sees the right dimensions.
         winsize = self._get_winsize_from_stdin()

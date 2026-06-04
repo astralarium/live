@@ -119,7 +119,7 @@ class ReadResult:
     # Stderr lines (without trailing newlines), in canonical order.
     stderr_lines: list[str]
     first_line: int  # first n actually emitted (0 if none)
-    last_line: int  # cursor for the trailer (lastLine at read completion)
+    last_line: int  # trailer cursor — agents resume with `tail -n +<L+1>`
     at_time: float  # wall-clock time of last write (active stream mtime); 0.0 if no segment
     at_byte: int  # cumulative byte cursor (where -c +B would resume)
     dropped: int  # k lines dropped (gap)
@@ -130,12 +130,9 @@ class ReadResult:
 
 
 def at_time_of(session_dir: Path) -> float:
-    """Wall-clock time of the most recent byte written to the active stream
-    segment. Returns 0.0 if no segment exists. The active stream is never
-    touched by the recorder's idle heartbeat, so this reflects real writes
-    only — partial-line bytes included."""
-    from .format import list_segments, stream_name
-
+    """Wall-clock time of the most recent byte written to the active stream.
+    Returns 0.0 if no segment exists. Heartbeats only touch the idx, so this
+    reflects real byte writes — partial-line bytes included."""
     segs = list_segments(session_dir)
     if not segs:
         return 0.0
@@ -143,6 +140,23 @@ def at_time_of(session_dir: Path) -> float:
         return os.path.getmtime(session_dir / stream_name(segs[-1]))
     except FileNotFoundError:
         return 0.0
+
+
+def _first_and_last_line(refs: list[SegmentRef]) -> tuple[int, int]:
+    """Scan refs from each end for the first/last indexed line. (0, 0) if empty."""
+    first_line = 0
+    for ref in refs:
+        rec = first_idx_record(ref.idx_path)
+        if rec is not None:
+            first_line = rec[0]
+            break
+    last_line = 0
+    for ref in reversed(refs):
+        rec = last_idx_record(ref.idx_path)
+        if rec is not None:
+            last_line = rec[0]
+            break
+    return first_line, last_line
 
 
 def at_byte_of(session_dir: Path) -> int:
@@ -170,19 +184,7 @@ def lines_since(
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
 
-    # Compute firstLine/lastLine, decide gap.
-    first_line = 0
-    for ref in refs:
-        rec = first_idx_record(ref.idx_path)
-        if rec is not None:
-            first_line = rec[0]
-            break
-    last_line = 0
-    for ref in reversed(refs):
-        rec = last_idx_record(ref.idx_path)
-        if rec is not None:
-            last_line = rec[0]
-            break
+    first_line, last_line = _first_and_last_line(refs)
 
     stderr_lines: list[str] = []
     dropped = 0
@@ -199,11 +201,7 @@ def lines_since(
     if first_line and emit_from <= last_line:
         for ref in refs:
             records = read_idx_records(ref.idx_path)
-            if not records:
-                continue
-            seg_first = records[0][0]
-            seg_last = records[-1][0]
-            if seg_last < emit_from:
+            if not records or records[-1][0] < emit_from:
                 continue
             stream = stream_segment_bytes(ref.stream_path)
             lines = lines_in_segment(stream, records)
@@ -214,7 +212,6 @@ def lines_since(
                     break
                 out.extend(lines[rec_idx])
 
-    # Partial-line tail in the highest segment.
     partial_bytes = 0
     partial_age = 0.0
     partial_seg: int | None = None
@@ -231,8 +228,6 @@ def lines_since(
         if tail:
             partial_bytes = len(tail)
             partial_seg = last_ref.seg
-            # Age from active stream mtime — heartbeats only touch the idx,
-            # so stream mtime is the time of the latest real byte write.
             partial_age = max(0.0, time.time() - at_time)
             out.extend(tail)
 
@@ -262,26 +257,12 @@ def lines_since_time(session_dir: Path, *, since_t: float) -> ReadResult:
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
 
-    first_line = 0
-    for ref in refs:
-        rec = first_idx_record(ref.idx_path)
-        if rec is not None:
-            first_line = rec[0]
-            break
-    last_line = 0
-    for ref in reversed(refs):
-        rec = last_idx_record(ref.idx_path)
-        if rec is not None:
-            last_line = rec[0]
-            break
+    first_line, last_line = _first_and_last_line(refs)
 
     out = bytearray()
     for ref in refs:
         records = read_idx_records(ref.idx_path)
-        if not records:
-            continue
-        # Skip whole segment if its newest record is before the cursor.
-        if records[-1][1] <= since_t:
+        if not records or records[-1][1] <= since_t:
             continue
         stream = stream_segment_bytes(ref.stream_path)
         lines = lines_in_segment(stream, records)
@@ -328,8 +309,8 @@ def head_first(
 ) -> ReadResult:
     """Head the first N lines or first K bytes (excluding partial tail).
 
-    Mirror of `tail_last`. Default N=10 to match Unix `head`. `last_line` in the
-    trailer points to the last fully-emitted line — `tail -vn +L` resumes there.
+    Mirror of `tail_last`. Default N=10 to match Unix `head`. `last_line` is the
+    last fully-emitted line; `tail -vn +<L+1>` resumes from there.
     """
     result = cat_all(session_dir)
     body = result.stdout
@@ -373,25 +354,13 @@ def head_first(
 
 
 def bytes_since(session_dir: Path, *, since: int) -> ReadResult:
-    """Read bytes after virtual offset `since` (tail -c +B). Emits raw bytes —
-    may start mid-line. Partial-line bytes in the active stream are included
-    naturally since they're part of the stream segment's size."""
+    """Read bytes after virtual offset `since` (tail -c +B). May start mid-line.
+    Partial-line bytes are included since they live in the active stream file."""
     refs = segment_refs(session_dir)
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
 
-    first_line = 0
-    for ref in refs:
-        rec = first_idx_record(ref.idx_path)
-        if rec is not None:
-            first_line = rec[0]
-            break
-    last_line = 0
-    for ref in reversed(refs):
-        rec = last_idx_record(ref.idx_path)
-        if rec is not None:
-            last_line = rec[0]
-            break
+    first_line, last_line = _first_and_last_line(refs)
 
     out = bytearray()
     cumulative = 0
@@ -400,19 +369,12 @@ def bytes_since(session_dir: Path, *, since: int) -> ReadResult:
             size = os.path.getsize(ref.stream_path)
         except FileNotFoundError:
             size = 0
-        if cumulative + size <= since:
-            cumulative += size
-            continue
-        offset = max(0, since - cumulative)
-        stream = stream_segment_bytes(ref.stream_path)
-        out.extend(stream[offset:])
+        if cumulative + size > since:
+            offset = max(0, since - cumulative)
+            out.extend(stream_segment_bytes(ref.stream_path)[offset:])
         cumulative += size
 
-    at_time = 0.0
-    try:
-        at_time = os.path.getmtime(refs[-1].stream_path)
-    except FileNotFoundError:
-        at_time = 0.0
+    at_time = at_time_of(session_dir)
 
     return ReadResult(
         stdout=bytes(out),
@@ -484,12 +446,7 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
 
-    first_line = 0
-    for ref in refs:
-        rec = first_idx_record(ref.idx_path)
-        if rec is not None:
-            first_line = rec[0]
-            break
+    first_line, _ = _first_and_last_line(refs)
 
     out = bytearray()
     last_n = 0
@@ -511,18 +468,12 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
             out.extend(lines[rec_idx])
             last_n = n
 
-    at_time = 0.0
-    try:
-        at_time = os.path.getmtime(refs[-1].stream_path)
-    except FileNotFoundError:
-        at_time = 0.0
-
     return ReadResult(
         stdout=bytes(out),
         stderr_lines=[],
         first_line=first_line if (first_line and out) else 0,
         last_line=last_n,
-        at_time=at_time,
+        at_time=at_time_of(session_dir),
         at_byte=len(out),
         dropped=0,
         first_retained=first_line,

@@ -28,6 +28,13 @@ from .reader import (
 from .recorder import record
 from .select_session import SelectorError, resolve_many, resolve_one
 from .sweep import SessionInfo, list_sessions, sweep_all
+from .verbose import (
+    emit_exit,
+    emit_extras,
+    emit_hung,
+    emit_partial,
+    emit_trailer,
+)
 
 # ----- error helpers -----
 
@@ -57,31 +64,14 @@ def _emit_read_result(
     if not verbose:
         return
 
-    # Ordered stderr lines: gap, cursor-ahead handled at call sites,
-    # then partial, hung, exit, then trailer.
-    for line in result.stderr_lines:
-        print(f"live: {line}", file=sys.stderr)
+    emit_extras(result.stderr_lines)
     if result.partial_bytes:
-        print(
-            f"live: partial-line bytes={result.partial_bytes}"
-            f" age={result.partial_age:.3f}",
-            file=sys.stderr,
-        )
+        emit_partial(result.partial_bytes, result.partial_age)
     if info.status == "hung":
-        print(
-            f"live: status=hung last-activity={info.last_activity:.3f}",
-            file=sys.stderr,
-        )
-    elif info.status == "exited":
-        if info.exit_code is not None:
-            print(f"live: exit-code={info.exit_code}", file=sys.stderr)
-    elif info.status == "inconsistent":
-        print("live: exit=inconsistent", file=sys.stderr)
-    print(
-        f"live: id={info.id} at-line={result.last_line}"
-        f" at-time={result.at_time:.3f} at-byte={result.at_byte}",
-        file=sys.stderr,
-    )
+        emit_hung(info.last_activity)
+    else:
+        emit_exit(info)
+    emit_trailer(info.id, result.last_line, result.at_time, result.at_byte)
 
 
 # ----- verbs -----

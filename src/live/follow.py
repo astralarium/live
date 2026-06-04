@@ -25,6 +25,7 @@ from .reader import (
     strip_ansi,
 )
 from .sweep import SessionInfo, session_info
+from .verbose import emit_exit, emit_hung, emit_trailer
 from .watcher import new_watcher
 
 
@@ -110,10 +111,7 @@ def follow_session(
                 except FileNotFoundError:
                     mtime = time.time()
                 if time.time() - mtime > 3 * cfg.heartbeat_sec and not hung_emitted:
-                    print(
-                        f"live: status=hung last-activity={mtime:.3f}",
-                        file=sys.stderr,
-                    )
+                    emit_hung(mtime)
                     hung_emitted = True
                 continue
 
@@ -197,15 +195,5 @@ def _emit_new_lines(
 def _emit_exit_trailer(
     session_dir: Path, session_id: str, cursor: int, cfg: Config
 ) -> None:
-    info = session_info(session_dir, cfg)
-    at_time = at_time_of(session_dir)
-    at_byte = at_byte_of(session_dir)
-    if info is not None and info.status == "exited" and info.exit_code is not None:
-        print(f"live: exit-code={info.exit_code}", file=sys.stderr)
-    elif info is not None and info.status == "inconsistent":
-        print("live: exit=inconsistent", file=sys.stderr)
-    print(
-        f"live: id={session_id} at-line={cursor}"
-        f" at-time={at_time:.3f} at-byte={at_byte}",
-        file=sys.stderr,
-    )
+    emit_exit(session_info(session_dir, cfg))
+    emit_trailer(session_id, cursor, at_time_of(session_dir), at_byte_of(session_dir))
