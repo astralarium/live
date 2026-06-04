@@ -1,4 +1,4 @@
-"""`live tail -c +B` resumable byte cursor (consumes `at-byte` from trailer)."""
+"""`live tail -c +K` resumable byte cursor (consumes `at-byte` from trailer)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_tail_c_plus_emits_bytes_after_cursor(project: Path, run_live) -> None:
-    """Probe at-byte, then `tail -c +B` should emit only bytes after position B."""
+    """Probe at-byte, then `tail -c +K` should emit only bytes after position K."""
     run_live(
         project, "run", "-n", "bc", "--", "sh", "-c",
         "echo aaa; echo bbb; echo ccc",

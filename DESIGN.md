@@ -27,7 +27,7 @@ Exit codes: `0` success; `1` runtime error; `2` usage error (bad flag, missing s
 
 A single positional token, resolved like a git ref:
 
-1. **NAME** match wins. `cat`/`tail` pick the most recent; `rm` operates on all matches.
+1. **NAME** match wins. `cat`/`head`/`tail` pick the most recent; `rm` operates on all matches.
 2. **UUID prefix** fallthrough. Unique match required; ambiguous → error.
 
 "Most recent" = UUIDv7 lex-descending sort. Use `--` to pass a token starting with `-`.

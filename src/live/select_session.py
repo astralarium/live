@@ -14,7 +14,7 @@ class SelectorError(Exception):
 
 
 def resolve_one(sessions: list[SessionInfo], token: str) -> SessionInfo:
-    """Newest-match-wins resolution for cat/tail.
+    """Newest-match-wins resolution for cat/head/tail.
 
     Names first; UUID prefix fallback. Returns the most recent match.
     """

@@ -113,7 +113,7 @@ def partial_tail_bytes(stream: bytes, idx_records: list[tuple[int, int]]) -> byt
 
 @dataclass
 class ReadResult:
-    """Output of a cat/tail invocation, before optional ANSI stripping."""
+    """Output of a cat/head/tail invocation, before optional ANSI stripping."""
 
     stdout: bytes
     # Stderr lines (without trailing newlines), in canonical order.
@@ -161,7 +161,7 @@ def _first_and_last_line(refs: list[SegmentRef]) -> tuple[int, int]:
 
 def at_byte_of(session_dir: Path) -> int:
     """Cumulative byte count across all stream segments (partial bytes included).
-    Returns 0 if no segments exist. This is the cursor where `tail -c +B` would
+    Returns 0 if no segments exist. This is the cursor where `tail -c +K` would
     resume."""
     refs = segment_refs(session_dir)
     total = 0
@@ -354,7 +354,7 @@ def head_first(
 
 
 def bytes_since(session_dir: Path, *, since: int) -> ReadResult:
-    """Read bytes after virtual offset `since` (tail -c +B). May start mid-line.
+    """Read bytes after virtual offset `since` (tail -c +K). May start mid-line.
     Partial-line bytes are included since they live in the active stream file."""
     refs = segment_refs(session_dir)
     if not refs:

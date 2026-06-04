@@ -23,7 +23,7 @@ live cat dev                  # full output
 live rm dev                   # delete
 ```
 
-Sessions are stored under `~/.live/sessions/`; `live ls`/`cat`/`tail`/`rm` filter to sessions started in the current directory. Pass `-g` / `--global` to search globally.
+Sessions are stored under `~/.live/sessions/`; `live ls`/`cat`/`head`/`tail`/`rm` filter to sessions started in the current directory. Pass `-g` / `--global` to search globally.
 
 ## Shell completion
 
@@ -41,6 +41,6 @@ live completion zsh > "${fpath[1]}/_live"
 live completion fish > ~/.config/fish/completions/live.fish
 ```
 
-Completes verbs, per-verb flags, and session names (via `live ls -a --json`).
+Completes verbs, per-verb flags, and session names + UUIDs (via `live ls --json`).
 After `live run`, completion hands off to the wrapped command's own completion —
 so `live run git che<TAB>` becomes `live run git checkout`.
