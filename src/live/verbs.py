@@ -8,6 +8,7 @@ import shutil
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from .config import Config, load_config
@@ -147,9 +148,17 @@ def cmd_ls(args) -> int:
     # Human columns: header + equal-width fields (last column unpadded).
     if not sessions:
         return 0
-    headers = ("ID", "STATUS", "NAME", "COMMAND")
+    scope = _scope_filter(args)
+    headers = ("ID", "TIME", "STATUS", "NAME", "CWD", "COMMAND")
     rows = [
-        (s.id[:8], s.status, s.meta.name or "-", " ".join(s.meta.command))
+        (
+            s.id[:8],
+            _fmt_time(s.exited_at) if s.exited_at is not None else "-",
+            s.status,
+            s.meta.name or "-",
+            _cwd_display(s.meta.cwd, scope),
+            " ".join(s.meta.command),
+        )
         for s in sessions
     ]
     widths = [
@@ -161,6 +170,20 @@ def cmd_ls(args) -> int:
     for r in rows:
         print(fmt.format(*r))
     return 0
+
+
+def _fmt_time(t: float) -> str:
+    return datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _cwd_display(meta_cwd: str, scope: Path | None) -> str:
+    """Relative path from `scope` when filtered; absolute `meta_cwd` under -g."""
+    if scope is None:
+        return meta_cwd
+    try:
+        return os.path.relpath(Path(meta_cwd).resolve(), scope.resolve())
+    except (OSError, ValueError):
+        return meta_cwd
 
 
 def _get_session_or_fail(
