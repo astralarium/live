@@ -23,8 +23,6 @@ live cat dev                  # full output
 live rm dev                   # delete
 ```
 
-Sessions are stored under `~/.live/sessions/`; `live ls`/`cat`/`head`/`tail`/`rm` filter to sessions started in the current directory. Pass `-g` / `--global` to search globally.
-
 ## Shell completion
 
 ```sh
