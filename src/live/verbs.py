@@ -291,40 +291,45 @@ def cmd_tail(args) -> int:
 
 
 def cmd_rm(args) -> int:
-    if not args.selectors and not args.all_exited:
-        _err("rm: missing selector (or --all-exited)")
+    if not args.selectors and not args.all_:
+        _err("rm: missing selector (use NAME, UUID-prefix, or --all)")
         return 2
 
     cfg = load_config()
     sweep_all(cfg)
     sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
 
-    targets: list[SessionInfo] = []
+    base: list[SessionInfo] = []
     any_error = False
 
-    if args.all_exited:
-        targets.extend([s for s in sessions if s.status in ("exited", "inconsistent")])
+    if args.all_:
+        base.extend(sessions)
 
     for token in args.selectors or []:
         try:
-            targets.extend(resolve_many(sessions, token))
+            base.extend(resolve_many(sessions, token))
         except SelectorError as e:
             _err(str(e))
             any_error = True
 
-    cutoff = getattr(args, "older_than", None)
-    if cutoff is not None:
-        targets = [s for s in targets if s.exited_at is not None and s.exited_at < cutoff]
-
-    # Dedupe by id.
+    # Dedupe base by id.
     seen: set[str] = set()
-    unique: list[SessionInfo] = []
-    for s in targets:
+    targets: list[SessionInfo] = []
+    for s in base:
         if s.id not in seen:
             seen.add(s.id)
-            unique.append(s)
+            targets.append(s)
 
-    for s in unique:
+    # Filters intersect the base set.
+    if args.exited:
+        targets = [s for s in targets if s.status in ("exited", "inconsistent")]
+    if args.untitled:
+        targets = [s for s in targets if s.meta.name is None]
+    if args.older_than is not None:
+        cutoff = args.older_than
+        targets = [s for s in targets if s.exited_at is not None and s.exited_at < cutoff]
+
+    for s in targets:
         try:
             _delete_session(s, force=args.force)
         except Exception as e:

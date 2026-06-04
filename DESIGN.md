@@ -8,17 +8,17 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, 
 
 ## CLI
 
-| Verb                                                             | Purpose                                                                                                                                               |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-n NAME] [--] <cmd…>`                                 | Run `<cmd>` under a PTY; record.                                                                                                                      |
-| `live ls [-a] [-g] [--json] [SELECTOR]`                          | List sessions in scope; `SELECTOR` filters by NAME or UUID-prefix.                                                                                    |
-| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`            | Concatenate session.                                                                                                                                  |
-| `live head [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`              | `-n N` first N lines (default 10; `-N` drops last N), `-c K` first K bytes (`-K` drops last K), `-t T` lines with idx `t <= T`.                       |
-| `live tail [-f] [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`         | `-n N` last N lines (default 10; `+N` for `n >= N`), `-c K` last K bytes (`+K` for bytes past offset K), `-t T` lines with idx `t > T`; `-f` follows. |
-| `live rm [-f] [-g] [--all-exited] [--older-than AGE] <SELECTOR>` | Delete sessions; `-f` SIGTERMs live runs; `--older-than` match sessions exited before AGE (`7d`, ISO datetime).                                       |
-| `live llms.txt`                                                  | Print agent guide.                                                                                                                                    |
-| `live completion <bash\|zsh\|fish>`                              | Print shell completion.                                                                                                                               |
-| `live update-shell [SHELL]`                                      | Install completion for `$SHELL` (or override).                                                                                                        |
+| Verb                                                                               | Purpose                                                                                                                                               |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live run [-n NAME] [--] <cmd…>`                                                   | Run `<cmd>` under a PTY; record.                                                                                                                      |
+| `live ls [-a] [-g] [--json] [SELECTOR]`                                            | List sessions in scope; `SELECTOR` filters by NAME or UUID-prefix.                                                                                    |
+| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                              | Concatenate session.                                                                                                                                  |
+| `live head [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`                                | `-n N` first N lines (default 10; `-N` drops last N), `-c K` first K bytes (`-K` drops last K), `-t T` lines with idx `t <= T`.                       |
+| `live tail [-f] [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`                           | `-n N` last N lines (default 10; `+N` for `n >= N`), `-c K` last K bytes (`+K` for bytes past offset K), `-t T` lines with idx `t > T`; `-f` follows. |
+| `live rm [-f] [-g] [--all] [--exited] [--untitled] [--older-than AGE] <SELECTOR…>` | Delete sessions matching `--all` or `<SELECTOR…>`, narrowed by `--exited`, `--untitled`, and `--older-than` (intersection). `-f` SIGTERMs live runs.  |
+| `live llms.txt`                                                                    | Print agent guide.                                                                                                                                    |
+| `live completion <bash\|zsh\|fish>`                                                | Print shell completion.                                                                                                                               |
+| `live update-shell [SHELL]`                                                        | Install completion for `$SHELL` (or override).                                                                                                        |
 
 `live <verb> -h` for full flag details. `-g` widens scope from cwd-and-below to all sessions. ANSI: default strips when stdout isn't a TTY; `--strip-ansi` / `--raw` override.
 

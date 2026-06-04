@@ -83,7 +83,7 @@ _live_complete() {
             ;;
         rm)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "-f --force -g --global --all-exited" -- "$cur") )
+                COMPREPLY=( $(compgen -W "-f --force -g --global --all --exited --untitled --older-than" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
@@ -181,7 +181,10 @@ _live() {
                     _arguments \
                         '(-f --force)'{-f,--force} \
                         '(-g --global)'{-g,--global} \
-                        '--all-exited' \
+                        '--all' \
+                        '--exited' \
+                        '--untitled' \
+                        '--older-than=:age (e.g. 7d, 12h):' \
                         '*:selector:_live_selectors'
                     ;;
                 completion|update-shell)
@@ -296,7 +299,10 @@ complete -c live -n "__fish_seen_subcommand_from tail" -s t -l time -r -d 'Time 
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'Kill running recorders'
 complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Resolve selectors globally'
-complete -c live -n "__fish_seen_subcommand_from rm" -l all-exited -d 'Remove every dead session'
+complete -c live -n "__fish_seen_subcommand_from rm" -l all -d 'Match every session in scope'
+complete -c live -n "__fish_seen_subcommand_from rm" -l exited -d 'Keep only exited sessions'
+complete -c live -n "__fish_seen_subcommand_from rm" -l untitled -d 'Keep only unnamed sessions'
+complete -c live -n "__fish_seen_subcommand_from rm" -l older-than -r -d 'Keep only sessions older than AGE'
 
 # run -- hand off after first non-flag token.
 complete -c live -n "__fish_seen_subcommand_from run" -s n -r -d 'Session name'

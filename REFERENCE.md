@@ -131,7 +131,7 @@ options:
 ## `live rm`
 
 ```
-usage: live rm [-h] [-f] [-g] [--all-exited] [--older-than AGE] [selectors ...]
+usage: live rm [-h] [-f] [-g] [--all] [--exited] [--untitled] [--older-than AGE] [selectors ...]
 
 Remove recorded sessions.
 
@@ -142,8 +142,10 @@ options:
   -h, --help        show this help message and exit
   -f, --force       SIGTERM live runs; ignore missing.
   -g, --global      Global scope.
-  --all-exited      Remove all dead sessions.
-  --older-than AGE  Restrict to sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.
+  --all             Delete all sessions in scope.
+  --exited          Delete sessions that have exited.
+  --untitled        Delete sessions without a name.
+  --older-than AGE  Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.
 ```
 
 ## `live completion`

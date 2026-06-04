@@ -264,10 +264,20 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Global scope.",
     )
     rm_p.add_argument(
-        "--all-exited",
+        "--all",
         action="store_true",
-        dest="all_exited",
-        help="Remove all dead sessions.",
+        dest="all_",
+        help="Delete all sessions in scope.",
+    )
+    rm_p.add_argument(
+        "--exited",
+        action="store_true",
+        help="Delete sessions that have exited.",
+    )
+    rm_p.add_argument(
+        "--untitled",
+        action="store_true",
+        help="Delete sessions without a name.",
     )
     rm_p.add_argument(
         "--older-than",
@@ -275,7 +285,7 @@ def _make_parser() -> argparse.ArgumentParser:
         default=None,
         dest="older_than",
         metavar="AGE",
-        help="Restrict to sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.",
+        help="Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.",
     )
     rm_p.add_argument(
         "selectors", nargs="*", help="NAME(s) or UUID-prefix(es)."

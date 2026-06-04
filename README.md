@@ -41,7 +41,7 @@ live rm dev                   # delete
 { "ttlDays": 7, "maxKb": 512, "segmentKb": 64, "heartbeatSec": 30 }
 ```
 
-Negative `ttlDays` disables sessions cleanup.
+Negative `ttlDays` disables session cleanup.
 
 ## References
 
