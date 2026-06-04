@@ -11,7 +11,6 @@ from datetime import datetime
 from . import __version__
 from . import verbs
 
-
 _AGE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([dhms])\s*$")
 
 
@@ -68,7 +67,7 @@ class _Formatter(argparse.HelpFormatter):
 def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="live",
-        description="Stream long-lived command output to coding agents.",
+        description="Live stream command line output. Inspect long processes from agent workflows.",
         formatter_class=_Formatter,
         add_help=True,
     )
@@ -82,9 +81,7 @@ def _make_parser() -> argparse.ArgumentParser:
         description="Run a command under a PTY and record its output.",
         formatter_class=_Formatter,
     )
-    run_p.add_argument(
-        "-n", "--name", default=None, help="Session name."
-    )
+    run_p.add_argument("-n", "--name", default=None, help="Session name.")
     run_p.add_argument(
         "cmd",
         nargs=argparse.REMAINDER,
@@ -287,9 +284,7 @@ def _make_parser() -> argparse.ArgumentParser:
         metavar="AGE",
         help="Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.",
     )
-    rm_p.add_argument(
-        "selectors", nargs="*", help="NAME(s) or UUID-prefix(es)."
-    )
+    rm_p.add_argument("selectors", nargs="*", help="NAME(s) or UUID-prefix(es).")
     rm_p.set_defaults(func=verbs.cmd_rm)
 
     # completion
@@ -299,9 +294,7 @@ def _make_parser() -> argparse.ArgumentParser:
         description="Print a shell completion script.",
         formatter_class=_Formatter,
     )
-    comp_p.add_argument(
-        "shell", choices=["bash", "zsh", "fish"], help="Target shell."
-    )
+    comp_p.add_argument("shell", choices=["bash", "zsh", "fish"], help="Target shell.")
     comp_p.set_defaults(func=verbs.cmd_completion)
 
     # update-shell

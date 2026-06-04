@@ -16,7 +16,7 @@
 ```
 usage: live [-h] [--version] <verb> ...
 
-Stream long-lived command output to coding agents.
+Live stream command line output. Inspect long processes from agent workflows.
 
 positional arguments:
   <verb>
