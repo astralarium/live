@@ -7,9 +7,9 @@ See [DESIGN.md](DESIGN.md) for the design spec and [DEVELOPMENT.md](DEVELOPMENT.
 ## Install
 
 ```sh
-pipx install live-stream
+pipx install live-cmd
 # or
-uv tool install live-stream
+uv tool install live-cmd
 ```
 
 ## Usage
