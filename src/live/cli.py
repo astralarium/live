@@ -316,8 +316,8 @@ def _make_parser() -> argparse.ArgumentParser:
     # llms.txt
     llms_p = sub.add_parser(
         "llms.txt",
-        help="Print agent guide.",
-        description="Display the agent guide for live.",
+        help="Print agent instructions.",
+        description="Print agent instructions.",
         formatter_class=_Formatter,
     )
     llms_p.set_defaults(func=verbs.cmd_llms_txt)

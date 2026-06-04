@@ -28,7 +28,7 @@ positional arguments:
     rm            Delete sessions.
     completion    Print shell completion script.
     update-shell  Install completion for the current shell.
-    llms.txt      Print agent guide.
+    llms.txt      Print agent instructions.
 
 options:
   -h, --help      show this help message and exit
@@ -181,13 +181,13 @@ options:
 ```
 usage: live llms.txt [-h]
 
-Display the agent guide for live.
+Print agent instructions.
 
 options:
   -h, --help  show this help message and exit
 ```
 
-### Agent guide
+### Agent instructions
 
 ```
 This project uses `live`, a CLI streamer.
