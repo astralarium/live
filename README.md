@@ -35,13 +35,14 @@ live rm dev                   # delete
 
 ## Config
 
-`~/.live/config.json`, auto-created. Defaults:
+`~/.live/config.json`, auto-created.
 
-```json
-{ "ttlDays": 7, "maxKb": 512, "segmentKb": 64, "heartbeatSec": 30 }
-```
-
-Negative `ttlDays` disables session cleanup.
+| Option         | Default | Description                                                         |
+| -------------- | ------- | ------------------------------------------------------------------- |
+| `ttlDays`      | `7`     | Time before old sessions are cleaned up. Negative value to disable. |
+| `maxKb`        | `512`   | Per-session output cap, in KB. Older segments are dropped.          |
+| `segmentKb`    | `64`    | Segment file size, in KB, before rotation.                          |
+| `heartbeatSec` | `30`    | Seconds between writer heartbeats; 3× this marks a session hung.    |
 
 ## References
 
