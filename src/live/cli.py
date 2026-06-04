@@ -269,12 +269,12 @@ def _make_parser() -> argparse.ArgumentParser:
     rm_p.add_argument(
         "--exited",
         action="store_true",
-        help="Delete sessions that have exited.",
+        help="Delete exited sessions.",
     )
     rm_p.add_argument(
         "--untitled",
         action="store_true",
-        help="Delete sessions without a name.",
+        help="Delete unnamed sessions.",
     )
     rm_p.add_argument(
         "--older-than",

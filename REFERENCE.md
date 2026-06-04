@@ -143,8 +143,8 @@ options:
   -f, --force       SIGTERM live runs; ignore missing.
   -g, --global      Global scope.
   --all             Delete all sessions in scope.
-  --exited          Delete sessions that have exited.
-  --untitled        Delete sessions without a name.
+  --exited          Delete exited sessions.
+  --untitled        Delete unnamed sessions.
   --older-than AGE  Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.
 ```
 

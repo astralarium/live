@@ -69,11 +69,39 @@ def test_rm_with_nothing_errors(project: Path, run_live) -> None:
     assert "missing selector" in rm.stderr
 
 
-def test_rm_filter_only_errors(project: Path, run_live) -> None:
-    """A bare filter is not a selector; needs --all or a NAME."""
-    rm = run_live(project, "rm", "--exited", check=False)
-    assert rm.returncode == 2
-    assert "missing selector" in rm.stderr
+def test_rm_exited_alone_implies_all(project: Path, run_live) -> None:
+    """`rm --exited` (no selector) deletes every exited session in scope —
+    --exited implies --all when no selector was given."""
+    run_live(project, "run", "-n", "a", "--", "sh", "-c", "echo x")
+    run_live(project, "run", "-n", "b", "--", "sh", "-c", "echo y")
+
+    rm = run_live(project, "rm", "--exited")
+    assert rm.returncode == 0
+    assert _ls_entries(project, run_live) == []
+
+
+def test_rm_untitled_alone_implies_exited_and_all(
+    project: Path, run_live, spawn_run, wait_for
+) -> None:
+    """`rm --untitled` deletes only unnamed-AND-exited sessions; the unnamed
+    running recorder is protected by the implied --exited."""
+    run_live(project, "run", "-n", "named", "--", "sh", "-c", "echo x")
+    run_live(project, "run", "--", "sh", "-c", "echo y")
+    spawn_run()
+
+    sessions = project / ".live" / "sessions"
+    assert wait_for(
+        lambda: sum(1 for s in sessions.iterdir() if (s / "meta.json").exists()) == 3
+    )
+
+    rm = run_live(project, "rm", "--untitled")
+    assert rm.returncode == 0
+
+    remaining = _ls_entries(project, run_live)
+    names = sorted((e.get("name") for e in remaining), key=lambda x: (x is None, x or ""))
+    statuses = {e["status"] for e in remaining}
+    assert names == ["named", None]
+    assert statuses == {"exited", "running"}
 
 
 # ----- --all selector -----

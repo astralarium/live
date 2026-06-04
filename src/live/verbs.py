@@ -321,8 +321,13 @@ def cmd_tail(args) -> int:
 
 
 def cmd_rm(args) -> int:
-    if not args.selectors and not args.all_:
-        _err("rm: missing selector (use NAME, UUID-prefix, or --all)")
+    filter_exited = args.exited or args.untitled
+    match_all = args.all_ or (filter_exited and not args.selectors)
+
+    if not args.selectors and not match_all:
+        _err(
+            "rm: missing selector (use NAME, UUID-prefix, --exited, --untitled, or --all)"
+        )
         return 2
 
     cfg = load_config()
@@ -332,7 +337,7 @@ def cmd_rm(args) -> int:
     base: list[SessionInfo] = []
     any_error = False
 
-    if args.all_:
+    if match_all:
         base.extend(sessions)
 
     for token in args.selectors or []:
@@ -351,12 +356,16 @@ def cmd_rm(args) -> int:
             targets.append(s)
 
     # Filters intersect the base set.
-    if args.exited:
+    if filter_exited:
         targets = [s for s in targets if s.status in STATUS_DEAD]
     if args.untitled:
         targets = [s for s in targets if s.meta.name is None]
     if args.older_than is not None:
-        targets = [s for s in targets if s.exited_at is not None and s.exited_at < args.older_than]
+        targets = [
+            s
+            for s in targets
+            if s.exited_at is not None and s.exited_at < args.older_than
+        ]
 
     for s in targets:
         try:
@@ -495,7 +504,10 @@ def _completion_install_path(shell: str) -> tuple[Path, str | None]:
             continue
     target_dir = home / ".local/share/zsh/site-functions"
     target = target_dir / "_live"
-    return target, f"this dir is not on $fpath. add to ~/.zshrc before compinit: fpath=({target_dir} $fpath)"
+    return (
+        target,
+        f"this dir is not on $fpath. add to ~/.zshrc before compinit: fpath=({target_dir} $fpath)",
+    )
 
 
 def _zsh_fpath_dirs() -> list[Path]:
