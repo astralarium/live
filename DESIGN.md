@@ -18,6 +18,7 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, 
 | `live rm [-f] [-g] [--all-exited] <SEL…>`           | Delete sessions; `-f` SIGTERMs live runs.                                              |
 | `live llms.txt`                                     | Print agent guide.                                                                     |
 | `live completion <bash\|zsh\|fish>`                 | Print shell completion.                                                                |
+| `live update-shell [SHELL]`                         | Install completion for `$SHELL` (or override).                                         |
 
 `live <verb> -h` for full flag details. `-g` widens scope from cwd-and-below to all sessions. ANSI: default strips when stdout isn't a TTY; `--strip-ansi` / `--raw` override.
 

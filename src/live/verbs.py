@@ -395,3 +395,101 @@ def cmd_completion(args) -> int:
         return 2
     sys.stdout.write(payload)
     return 0
+
+
+def cmd_update_shell(args) -> int:
+    from .completion import script_for
+
+    shell = args.shell or _detect_shell()
+    if shell is None:
+        _err("could not detect shell; pass bash, zsh, or fish")
+        return 2
+    payload = script_for(shell)
+    if payload is None:
+        _err(f"unsupported shell: {shell}")
+        return 2
+
+    dst, hint = _completion_install_path(shell)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(payload)
+    print(f"installed {shell} completion -> {dst}")
+    if hint:
+        print(hint)
+    print(_activation_hint(shell))
+    return 0
+
+
+def _activation_hint(shell: str) -> str:
+    if shell == "zsh":
+        # compinit caches in ~/.zcompdump — wipe it so the new _live is seen.
+        return "then reload: rm -f ~/.zcompdump* && exec zsh"
+    if shell == "bash":
+        return "then reload: exec bash"
+    return "open a new shell to pick up the change."
+
+
+def _detect_shell() -> str | None:
+    name = os.path.basename(os.environ.get("SHELL", ""))
+    if name in ("bash", "zsh", "fish"):
+        return name
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["ps", "-p", str(os.getppid()), "-o", "comm="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if out.returncode == 0:
+            name = os.path.basename(out.stdout.strip().lstrip("-"))
+            if name in ("bash", "zsh", "fish"):
+                return name
+    except Exception:
+        pass
+    return None
+
+
+def _completion_install_path(shell: str) -> tuple[Path, str | None]:
+    """Return (destination, hint). `hint` is a one-line note printed after install."""
+    home = Path.home()
+    if shell == "bash":
+        return home / ".local/share/bash-completion/completions/live", None
+    if shell == "fish":
+        return home / ".config/fish/completions/live.fish", None
+    # zsh — find a writable dir already on $fpath.
+    fpath_dirs = _zsh_fpath_dirs()
+    for d in fpath_dirs:
+        try:
+            if d.is_dir() and os.access(d, os.W_OK):
+                return d / "_live", None
+        except OSError:
+            continue
+    target_dir = home / ".local/share/zsh/site-functions"
+    target = target_dir / "_live"
+    return target, f"this dir is not on $fpath. add to ~/.zshrc before compinit: fpath=({target_dir} $fpath)"
+
+
+def _zsh_fpath_dirs() -> list[Path]:
+    """Best-effort enumeration of zsh's $fpath.
+
+    $FPATH (scalar twin of $fpath) is NOT exported by default, so we fall back
+    to `zsh -ic 'print -rl -- $fpath'` to read the user's interactive setup.
+    """
+    raw = os.environ.get("FPATH", "")
+    if raw:
+        return [Path(p) for p in raw.split(":") if p]
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["zsh", "-ic", "print -rl -- $fpath"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if out.returncode == 0:
+            return [Path(ln) for ln in out.stdout.splitlines() if ln.startswith("/")]
+    except Exception:
+        pass
+    return []

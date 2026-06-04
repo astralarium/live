@@ -30,7 +30,7 @@ _live_complete() {
     done
 
     if [ -z "$verb" ]; then
-        COMPREPLY=( $(compgen -W "run ls cat head tail rm llms.txt completion" -- "$cur") )
+        COMPREPLY=( $(compgen -W "run ls cat head tail rm llms.txt completion update-shell" -- "$cur") )
         return
     fi
 
@@ -88,7 +88,7 @@ _live_complete() {
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
             ;;
-        completion)
+        completion|update-shell)
             COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
             ;;
     esac
@@ -184,7 +184,7 @@ _live() {
                         '--all-exited' \
                         '*:selector:_live_selectors'
                     ;;
-                completion)
+                completion|update-shell)
                     _arguments '1:shell:(bash zsh fish)'
                     ;;
             esac
@@ -203,6 +203,7 @@ _live_verbs() {
         'rm:Delete sessions'
         'llms.txt:Print a token-minimal agent guide'
         'completion:Print shell completion script'
+        'update-shell:Install completion for the current shell'
     )
     _describe -t verbs 'verb' verbs
 }
@@ -246,7 +247,7 @@ function __live_selectors
     live ls $args --json 2>/dev/null | string match -rga '"(?:id|name)":"([^"]+)"' | sort -u
 end
 
-set -l verbs run ls cat head tail rm llms.txt completion
+set -l verbs run ls cat head tail rm llms.txt completion update-shell
 
 complete -c live -f
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Wrap <cmd> under a PTY'
@@ -257,6 +258,7 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail a 
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent guide'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install completion for current shell'
 
 # Selector completion for ls / cat / head / tail / rm.
 complete -c live -n "__fish_seen_subcommand_from ls cat head tail rm" -a "(__live_selectors)"
@@ -301,8 +303,8 @@ complete -c live -n "__fish_seen_subcommand_from run" -s n -r -d 'Session name'
 complete -c live -n "__fish_seen_subcommand_from run; and __fish_complete_subcommand --skip 2" \
     -a "(__fish_complete_subcommand --skip 2)"
 
-# completion
-complete -c live -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
+# completion / update-shell
+complete -c live -n "__fish_seen_subcommand_from completion update-shell" -a "bash zsh fish"
 """
 
 

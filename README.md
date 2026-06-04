@@ -27,20 +27,14 @@ Sessions are stored under `~/.live/sessions/`; `live ls`/`cat`/`head`/`tail`/`rm
 
 ## Shell completion
 
-`live completion <bash|zsh|fish>` prints the completion script for that shell.
-Install once and reload your shell.
-
 ```sh
-# bash (requires the bash-completion package)
-live completion bash > ~/.local/share/bash-completion/completions/live
-
-# zsh (drop into any directory on $fpath)
-live completion zsh > "${fpath[1]}/_live"
-
-# fish
-live completion fish > ~/.config/fish/completions/live.fish
+live update-shell        # detect $SHELL, install completion, reload your shell
 ```
 
-Completes verbs, per-verb flags, and session names + UUIDs (via `live ls --json`).
-After `live run`, completion hands off to the wrapped command's own completion —
-so `live run git che<TAB>` becomes `live run git checkout`.
+Or print the script and place it yourself:
+
+```sh
+live completion bash > ~/.local/share/bash-completion/completions/live
+live completion zsh  > "${fpath[1]}/_live"
+live completion fish > ~/.config/fish/completions/live.fish
+```

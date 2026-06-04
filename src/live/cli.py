@@ -216,6 +216,19 @@ def _make_parser() -> argparse.ArgumentParser:
     comp_p.add_argument("shell", choices=["bash", "zsh", "fish"])
     comp_p.set_defaults(func=verbs.cmd_completion)
 
+    # update-shell
+    up_p = sub.add_parser(
+        "update-shell", help="Install completion for the current shell."
+    )
+    up_p.add_argument(
+        "shell",
+        nargs="?",
+        choices=["bash", "zsh", "fish"],
+        default=None,
+        help="Target shell (default: $SHELL).",
+    )
+    up_p.set_defaults(func=verbs.cmd_update_shell)
+
     return p
 
 
