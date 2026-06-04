@@ -27,6 +27,9 @@ from .lock import probe_held
 from .paths import sessions_dir, within_cwd
 
 
+STATUS_DEAD = ("exited", "inconsistent")
+
+
 @dataclass
 class SessionInfo:
     """Aggregated session view. All times are float seconds."""
@@ -177,7 +180,7 @@ def session_info(session_dir: Path, cfg: Config) -> SessionInfo | None:
     if meta.exited_at is not None:
         exited_at = meta.exited_at
         exit_code = meta.exit_code
-    elif status in ("exited", "inconsistent"):
+    elif status in STATUS_DEAD:
         dead = session_dir / DEAD_NAME
         try:
             exited_at = os.path.getmtime(dead)

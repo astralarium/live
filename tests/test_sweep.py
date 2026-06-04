@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
-import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -14,15 +11,6 @@ from live.config import Config
 from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME, Meta, Watermarks
 from live.sweep import SessionInfo, sweep_one
 from live.verbose import emit_exit
-
-
-def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
 
 
 def _stub_session(sessions_dir: Path, *, sid: str = "0190fake-0000-7000-8000-000000000000") -> Path:
@@ -148,34 +136,20 @@ def test_emit_exit_running_is_silent(capsys) -> None:
 # ----- rm -f recovery -----
 
 
-def test_rm_f_terminates_running_recorder(project: Path, live_env, run_live) -> None:
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "live.cli", "run", "-n", "longrun", "--",
-         "sh", "-c", "echo started; sleep 60"],
-        cwd=str(project),
-        env=live_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        sessions = project / ".live" / "sessions"
-        assert _wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
-        # Wait until the recorder has flock + meta written.
-        [sess] = list(sessions.iterdir())
-        assert _wait_for(lambda: (sess / "meta.json").exists())
+def test_rm_f_terminates_running_recorder(
+    project: Path, run_live, spawn_run, wait_for
+) -> None:
+    proc = spawn_run("-n", "longrun")
+    sessions = project / ".live" / "sessions"
+    assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
+    [sess] = list(sessions.iterdir())
+    assert wait_for(lambda: (sess / "meta.json").exists())
 
-        rm = run_live(project, "rm", "-f", "longrun")
-        assert rm.returncode == 0
-        # Recorder process should die shortly after SIGTERM + dir unlink.
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-            assert False, "rm -f did not terminate the recorder"
-        # Session dir is gone.
-        assert not sess.exists()
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait(timeout=5)
+    rm = run_live(project, "rm", "-f", "longrun")
+    assert rm.returncode == 0
+    # Recorder process should die shortly after SIGTERM + dir unlink.
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        raise AssertionError("rm -f did not terminate the recorder")
+    assert not sess.exists()

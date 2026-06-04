@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 
-from .sweep import SessionInfo
+from .sweep import STATUS_DEAD, SessionInfo
 
 
 def _emit(msg: str) -> None:
@@ -37,7 +37,7 @@ def emit_exit(info: SessionInfo | None) -> None:
         return
     if info.status == "inconsistent":
         _emit("exit=inconsistent")
-    if info.status in ("exited", "inconsistent") and info.exit_code is not None:
+    if info.status in STATUS_DEAD and info.exit_code is not None:
         _emit(f"exit-code={info.exit_code}")
 
 

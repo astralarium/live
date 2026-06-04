@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,15 +11,6 @@ from pathlib import Path
 import pytest
 
 from live.cli import _parse_age
-
-
-def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
 
 
 # ----- _parse_age unit tests -----
@@ -107,7 +96,7 @@ def test_all_and_exited_filter(project: Path, run_live) -> None:
     run_live(project, "run", "-n", "old", "--", "sh", "-c", "echo x")
     run_live(project, "run", "-n", "new", "--", "sh", "-c", "echo y")
 
-    # Both already exited (sh -c finishes immediately); --exited keeps them in.
+    # Both already exited (sh -c returns immediately); --exited matches both.
     rm = run_live(project, "rm", "--all", "--exited")
     assert rm.returncode == 0
     assert _ls_entries(project, run_live) == []
@@ -159,43 +148,26 @@ def test_name_with_older_than(project: Path, run_live) -> None:
 # ----- intersect over orthogonal axes -----
 
 
-def test_exited_and_untitled_intersect(project: Path, live_env, run_live) -> None:
+def test_exited_and_untitled_intersect(
+    project: Path, run_live, spawn_run, wait_for
+) -> None:
     """--exited and --untitled cover orthogonal axes (status × naming).
-    `--all --exited --untitled` deletes only sessions matching BOTH:
-    a named-exited session, an unnamed-running one, and an unnamed-exited one;
-    only the last qualifies."""
+    Of {named-exited, unnamed-exited, unnamed-running}, only the unnamed-exited
+    session matches BOTH filters."""
     run_live(project, "run", "-n", "named", "--", "sh", "-c", "echo x")  # named exited
     run_live(project, "run", "--", "sh", "-c", "echo y")                 # unnamed exited
+    spawn_run()                                                          # unnamed running
 
-    proc = subprocess.Popen(  # unnamed running
-        [sys.executable, "-m", "live.cli", "run", "--", "sh", "-c", "echo go; sleep 60"],
-        cwd=str(project),
-        env=live_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    sessions = project / ".live" / "sessions"
+    assert wait_for(
+        lambda: sum(1 for s in sessions.iterdir() if (s / "meta.json").exists()) == 3
     )
-    try:
-        sessions = project / ".live" / "sessions"
-        assert _wait_for(lambda: sum(1 for _ in sessions.iterdir()) == 3)
-        assert _wait_for(
-            lambda: sum(1 for s in sessions.iterdir() if (s / "meta.json").exists()) == 3
-        )
 
-        rm = run_live(project, "rm", "--all", "--exited", "--untitled")
-        assert rm.returncode == 0
+    rm = run_live(project, "rm", "--all", "--exited", "--untitled")
+    assert rm.returncode == 0
 
-        # Only the unnamed-exited session is gone; named-exited and unnamed-running remain.
-        remaining = _ls_entries(project, run_live)
-        names = [e.get("name") for e in remaining]
-        statuses = [e["status"] for e in remaining]
-        assert sorted(names, key=lambda x: (x is None, x or "")) == ["named", None]
-        assert "running" in statuses
-        assert "exited" in statuses
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+    remaining = _ls_entries(project, run_live)
+    names = sorted((e.get("name") for e in remaining), key=lambda x: (x is None, x or ""))
+    statuses = {e["status"] for e in remaining}
+    assert names == ["named", None]
+    assert statuses == {"exited", "running"}

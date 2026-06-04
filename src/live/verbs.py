@@ -27,7 +27,7 @@ from .reader import (
 )
 from .recorder import record
 from .select_session import SelectorError, resolve_many, resolve_one
-from .sweep import SessionInfo, list_sessions, sweep_all
+from .sweep import STATUS_DEAD, SessionInfo, list_sessions, sweep_all
 from .verbose import (
     emit_exit,
     emit_extras,
@@ -322,12 +322,11 @@ def cmd_rm(args) -> int:
 
     # Filters intersect the base set.
     if args.exited:
-        targets = [s for s in targets if s.status in ("exited", "inconsistent")]
+        targets = [s for s in targets if s.status in STATUS_DEAD]
     if args.untitled:
         targets = [s for s in targets if s.meta.name is None]
     if args.older_than is not None:
-        cutoff = args.older_than
-        targets = [s for s in targets if s.exited_at is not None and s.exited_at < cutoff]
+        targets = [s for s in targets if s.exited_at is not None and s.exited_at < args.older_than]
 
     for s in targets:
         try:
