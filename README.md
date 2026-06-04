@@ -33,7 +33,13 @@ live cat dev                  # full output
 live rm dev                   # delete
 ```
 
-By default, old sessions are cleaned up a week after termination.
+## Config
+
+`~/.live/config.json`, auto-created. Defaults:
+
+```json
+{ "ttlDays": 7, "maxKb": 512, "segmentKb": 64, "heartbeatSec": 30 }
+```
 
 ## References
 
