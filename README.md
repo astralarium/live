@@ -10,10 +10,16 @@ pipx install live-cmd
 uv tool install live-cmd
 ```
 
-Install shell completions:
+Shell completions:
 
 ```sh
-live update-shell        # detect $SHELL, install completion, reload your shell
+live update-shell        # detect $SHELL, install completions
+```
+
+Agent guide:
+
+```sh
+live llms.txt
 ```
 
 ## Usage
@@ -27,8 +33,10 @@ live cat dev                  # full output
 live rm dev                   # delete
 ```
 
+By default, old sessions are cleaned up a week after termination.
+
 ## References
 
-- [REFERENCE.md](REFERENCE.md)j
-- [DESIGN.md](DESIGN.md)
-- [DEVELOPMENT.md](DEVELOPMENT.md)
+- [REFERENCE.md](https://github.com/astralarium/live/blob/main/REFERENCE.md)
+- [DESIGN.md](https://github.com/astralarium/live/blob/main/DESIGN.md)
+- [DEVELOPMENT.md](https://github.com/astralarium/live/blob/main/DEVELOPMENT.md)
