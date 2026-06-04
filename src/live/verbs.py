@@ -26,8 +26,15 @@ from .reader import (
     tail_last,
 )
 from .recorder import record
-from .select_session import SelectorError, resolve_many, resolve_one
-from .sweep import STATUS_DEAD, SessionInfo, list_sessions, sweep_all
+from .session import (
+    STATUS_DEAD,
+    SelectorError,
+    SessionInfo,
+    list_sessions,
+    resolve_many,
+    resolve_one,
+    sweep_all,
+)
 from .verbose import (
     emit_exit,
     emit_extras,

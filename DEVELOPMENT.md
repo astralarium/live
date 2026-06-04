@@ -4,7 +4,7 @@ Install from source:
 
 ```sh
 cd path/to/here
-uv venv --python ">=3.14"
+uv venv
 source .venv/bin/activate
 uv pip install -e .
 live --version

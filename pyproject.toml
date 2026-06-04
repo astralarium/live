@@ -7,13 +7,13 @@ name = "live-cmd"
 version = "0.1.2"
 description = "Live stream command line output."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Mara Kim" }]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX",
-    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.10",
 ]
 
 [project.scripts]

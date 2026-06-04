@@ -24,7 +24,7 @@ from .reader import (
     stream_segment_bytes,
     strip_ansi,
 )
-from .sweep import SessionInfo, session_info
+from .session import SessionInfo, session_info
 from .verbose import emit_exit, emit_hung, emit_trailer
 from .watcher import new_watcher
 

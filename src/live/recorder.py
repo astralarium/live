@@ -51,7 +51,7 @@ class _Recorder:
         self.command = command
         self.name = name
 
-        self.session_id = str(uuid.uuid7())
+        self.session_id = str(uuid.uuid4())
         self.dir: Path = session_dir(self.session_id)
         self.meta = Meta(
             id=self.session_id,

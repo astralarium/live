@@ -9,11 +9,11 @@ from pathlib import Path
 
 from live.config import Config
 from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME, Meta, Watermarks
-from live.sweep import SessionInfo, sweep_one
+from live.session import SessionInfo, sweep_one
 from live.verbose import emit_exit
 
 
-def _stub_session(sessions_dir: Path, *, sid: str = "0190fake-0000-7000-8000-000000000000") -> Path:
+def _stub_session(sessions_dir: Path, *, sid: str = "00000000-0000-4000-8000-000000000000") -> Path:
     d = sessions_dir / sid
     d.mkdir(mode=0o700, parents=True, exist_ok=False)
     return d

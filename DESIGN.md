@@ -4,7 +4,7 @@ Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>`
 
 The recorder is the sole writer per session and holds an exclusive `flock` on `process.lock` for its lifetime — that lock IS the liveness signal. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
 
-Python 3.14+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, ioctl, signals, atomic rename, struct packing, JSON, UUIDv7, and the kqueue/inotify primitives that power `tail -f` are all stdlib. PyPI: `live-cmd`.
+Python 3.10+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, ioctl, signals, atomic rename, struct packing, JSON, UUIDv4, and the kqueue/inotify primitives that power `tail -f` are all stdlib. PyPI: `live-cmd`.
 
 ## CLI
 
@@ -31,7 +31,7 @@ A single positional token, resolved like a git ref:
 1. **NAME** match wins. `cat`/`head`/`tail` pick the most recent; `rm` operates on all matches.
 2. **UUID prefix** fallthrough. Unique match required; ambiguous → error.
 
-"Most recent" = UUIDv7 lex-descending sort. Use `--` to pass a token starting with `-`.
+"Most recent" = descending `meta.startedAt`. Use `--` to pass a token starting with `-`.
 
 ## Verbose output
 
@@ -59,7 +59,7 @@ Possible preceding lines, in order: `dropped <k> lines …` (gap), `since=<N> > 
       lines.NNNN.idx    # binary line index: struct.pack(">Qd", n, t), one per line
 ```
 
-The recorder appends to the highest-numbered pair; frozen segments are immutable until retention unlinks them. Session IDs are UUIDv7 (lex-monotonic = chronological).
+The recorder appends to the highest-numbered pair; frozen segments are immutable until retention unlinks them. Session IDs are UUIDv4; chronological order comes from `meta.startedAt`.
 
 Scope is a filter on `meta.cwd`: read verbs default to cwd-or-descendant (symlinks resolved); `-g` widens.
 

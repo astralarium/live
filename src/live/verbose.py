@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 
-from .sweep import STATUS_DEAD, SessionInfo
+from .session import STATUS_DEAD, SessionInfo
 
 
 def _emit(msg: str) -> None:

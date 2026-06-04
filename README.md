@@ -2,7 +2,7 @@
 
 Live stream command line output. Inspect long processes from agent workflows.
 
-Requires Python 3.14+. Zero dependencies.
+Requires Python 3.10+. Zero dependencies.
 
 ## Install
 
