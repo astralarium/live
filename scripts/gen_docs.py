@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -12,17 +13,20 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "REFERENCE.md"
 LIVE = [sys.executable, "-m", "live.cli"]
 
+# Wide $COLUMNS so argparse keeps usage lines on a single line.
+ENV = {**os.environ, "COLUMNS": "200"}
+
 
 def live_help(*args: str) -> str:
     proc = subprocess.run(
-        [*LIVE, *args, "-h"], capture_output=True, text=True, check=True
+        [*LIVE, *args, "-h"], capture_output=True, text=True, check=True, env=ENV
     )
     return proc.stdout.rstrip()
 
 
 def live_run(*args: str) -> str:
     proc = subprocess.run(
-        [*LIVE, *args], capture_output=True, text=True, check=True
+        [*LIVE, *args], capture_output=True, text=True, check=True, env=ENV
     )
     return proc.stdout.rstrip()
 

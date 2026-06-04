@@ -17,7 +17,8 @@ DEFAULTS = {
 
 
 _VALIDATORS = {
-    "ttlDays": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
+    # ttlDays: any int; negative disables sweeping (keep sessions forever).
+    "ttlDays": lambda v: isinstance(v, int) and not isinstance(v, bool),
     "maxKb": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
     "segmentKb": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
     "heartbeatSec": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,

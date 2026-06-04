@@ -312,6 +312,10 @@ def cmd_rm(args) -> int:
             _err(str(e))
             any_error = True
 
+    cutoff = getattr(args, "older_than", None)
+    if cutoff is not None:
+        targets = [s for s in targets if s.exited_at is not None and s.exited_at < cutoff]
+
     # Dedupe by id.
     seen: set[str] = set()
     unique: list[SessionInfo] = []

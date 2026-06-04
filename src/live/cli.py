@@ -3,10 +3,36 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+import time
+from datetime import datetime
 
 from . import __version__
 from . import verbs
+
+
+_AGE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([dhms])\s*$")
+
+
+def _parse_age(value: str) -> float:
+    """Return a cutoff in epoch seconds. Sessions exited before it count as older.
+
+    Duration form: `7d`, `12h`, `30m`, `60s` → `now - N`.
+    Absolute form: ISO date/datetime (`2026-01-01`, `2026-01-01T12:00:00`); naive
+    timestamps are interpreted as local time.
+    """
+    m = _AGE_RE.match(value)
+    if m:
+        n = float(m.group(1))
+        unit = {"d": 86400, "h": 3600, "m": 60, "s": 1}[m.group(2)]
+        return time.time() - n * unit
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected duration (e.g. 7d, 12h, 30m, 60s) or ISO datetime (got {value!r})"
+        )
 
 
 def _count_or_cursor(prefix: str):
@@ -242,6 +268,14 @@ def _make_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="all_exited",
         help="Remove all dead sessions.",
+    )
+    rm_p.add_argument(
+        "--older-than",
+        type=_parse_age,
+        default=None,
+        dest="older_than",
+        metavar="AGE",
+        help="Restrict to sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.",
     )
     rm_p.add_argument(
         "selectors", nargs="*", help="NAME(s) or UUID-prefix(es)."

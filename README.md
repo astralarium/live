@@ -41,6 +41,8 @@ live rm dev                   # delete
 { "ttlDays": 7, "maxKb": 512, "segmentKb": 64, "heartbeatSec": 30 }
 ```
 
+Negative `ttlDays` disables sessions cleanup.
+
 ## References
 
 - [REFERENCE.md](https://github.com/astralarium/live/blob/main/REFERENCE.md)

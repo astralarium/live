@@ -92,7 +92,9 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
         except FileNotFoundError:
             return
 
-    # TTL: delete if older than ttlDays.
+    # TTL: delete if older than ttlDays; negative disables.
+    if cfg.ttl_days < 0:
+        return
     try:
         mtime = os.path.getmtime(dead)
     except FileNotFoundError:

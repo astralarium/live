@@ -82,6 +82,25 @@ def test_sweep_skips_session_without_lock_file(tmp_path: Path) -> None:
     assert not (sess / DEAD_NAME).exists()
 
 
+def test_sweep_negative_ttl_never_deletes(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(mode=0o700)
+    sess = _stub_session(sessions_dir)
+    (sess / LOCK_NAME).write_text("99999\n")
+    (sess / "stream.0000.log").write_bytes(b"a\n")
+    (sess / "lines.0000.idx").write_bytes(b"\x00" * 16)
+    # Pre-stamp deadAt to a long-ago mtime so a positive TTL would delete it.
+    dead = sess / DEAD_NAME
+    dead.write_bytes(b"")
+    long_ago = time.time() - 365 * 86400
+    os.utime(dead, (long_ago, long_ago))
+
+    sweep_one(sess, _cfg(ttl_days=-1))
+
+    assert sess.exists()
+    assert dead.exists()
+
+
 # ----- exit-status helper -----
 
 

@@ -8,17 +8,17 @@ Python 3.14+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, 
 
 ## CLI
 
-| Verb                                                     | Purpose                                                                                                                                               |
-| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-n NAME] [--] <cmd…>`                         | Run `<cmd>` under a PTY; record.                                                                                                                      |
-| `live ls [-a] [-g] [--json] [SELECTOR]`                  | List sessions in scope; `SELECTOR` filters by NAME or UUID-prefix.                                                                                    |
-| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`    | Concatenate session.                                                                                                                                  |
-| `live head [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`      | `-n N` first N lines (default 10; `-N` drops last N), `-c K` first K bytes (`-K` drops last K), `-t T` lines with idx `t <= T`.                       |
-| `live tail [-f] [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>` | `-n N` last N lines (default 10; `+N` for `n >= N`), `-c K` last K bytes (`+K` for bytes past offset K), `-t T` lines with idx `t > T`; `-f` follows. |
-| `live rm [-f] [-g] [--all-exited] <SELECTOR>`            | Delete sessions; `-f` SIGTERMs live runs.                                                                                                             |
-| `live llms.txt`                                          | Print agent guide.                                                                                                                                    |
-| `live completion <bash\|zsh\|fish>`                      | Print shell completion.                                                                                                                               |
-| `live update-shell [SHELL]`                              | Install completion for `$SHELL` (or override).                                                                                                        |
+| Verb                                                             | Purpose                                                                                                                                               |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live run [-n NAME] [--] <cmd…>`                                 | Run `<cmd>` under a PTY; record.                                                                                                                      |
+| `live ls [-a] [-g] [--json] [SELECTOR]`                          | List sessions in scope; `SELECTOR` filters by NAME or UUID-prefix.                                                                                    |
+| `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`            | Concatenate session.                                                                                                                                  |
+| `live head [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`              | `-n N` first N lines (default 10; `-N` drops last N), `-c K` first K bytes (`-K` drops last K), `-t T` lines with idx `t <= T`.                       |
+| `live tail [-f] [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`         | `-n N` last N lines (default 10; `+N` for `n >= N`), `-c K` last K bytes (`+K` for bytes past offset K), `-t T` lines with idx `t > T`; `-f` follows. |
+| `live rm [-f] [-g] [--all-exited] [--older-than AGE] <SELECTOR>` | Delete sessions; `-f` SIGTERMs live runs; `--older-than` match sessions exited before AGE (`7d`, ISO datetime).                                       |
+| `live llms.txt`                                                  | Print agent guide.                                                                                                                                    |
+| `live completion <bash\|zsh\|fish>`                              | Print shell completion.                                                                                                                               |
+| `live update-shell [SHELL]`                                      | Install completion for `$SHELL` (or override).                                                                                                        |
 
 `live <verb> -h` for full flag details. `-g` widens scope from cwd-and-below to all sessions. ANSI: default strips when stdout isn't a TTY; `--strip-ansi` / `--raw` override.
 
@@ -69,7 +69,7 @@ Scope is a filter on `meta.cwd`: read verbs default to cwd-or-descendant (symlin
 - **Prefix invariant.** Stream is always one complete line ahead of, or equal to, the index — never the inverse. Crash leaves an unindexed complete line; sweepers stamp it `inconsistent`.
 - **Absolute line numbers.** `n` is monotonic across the session's lifetime. Retention deletes but never renumbers; cursors past the oldest retained line get a `dropped` notice.
 - **Heartbeat.** Recorder advances the active idx mtime every `heartbeatSec`. Staleness past `3 × heartbeatSec` while the lock is held = `hung`.
-- **Sweep on every read.** Each verb that touches sessions stamps dead-but-unmarked ones (exclusive create of `deadAt`) and deletes those past `ttlDays`. Races are safe.
+- **Sweep on every read.** Each verb that touches sessions stamps dead-but-unmarked ones (exclusive create of `deadAt`) and deletes those past `ttlDays`. Negative `ttlDays` disables the delete pass. Races are safe.
 - **Graceful exit ordering.** `meta.json` → `deadAt` → unlock, in that order, so no sweeper races in with a wrong verdict.
 - **Signals.** `SIGWINCH` propagates window size. `SIGTERM`/`SIGHUP` forward to the child. `SIGINT` forwards only when stdin isn't a TTY (otherwise line discipline routes ^C directly). `live run` exits with the child's code, or `128 + signum` if signal-killed.
 - **Config.** `~/.live/config.json` loads on every invocation. Partial files valid; unknown keys ignored; malformed fields fall back to defaults with a stderr warning.

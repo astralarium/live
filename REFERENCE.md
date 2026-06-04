@@ -88,9 +88,7 @@ options:
 ## `live head`
 
 ```
-usage: live head [-h] [-v] [-g] [--strip-ansi | --raw] [-n LINES | -c BYTES |
-                 -t TIME]
-                 selector
+usage: live head [-h] [-v] [-g] [--strip-ansi | --raw] [-n LINES | -c BYTES | -t TIME] selector
 
 Display the first part of a session.
 
@@ -111,9 +109,7 @@ options:
 ## `live tail`
 
 ```
-usage: live tail [-h] [-f] [-v] [-g] [--strip-ansi | --raw] [-n LINES |
-                 -c BYTES | -t TIME]
-                 selector
+usage: live tail [-h] [-f] [-v] [-g] [--strip-ansi | --raw] [-n LINES | -c BYTES | -t TIME] selector
 
 Display the last part of a session.
 
@@ -135,18 +131,19 @@ options:
 ## `live rm`
 
 ```
-usage: live rm [-h] [-f] [-g] [--all-exited] [selectors ...]
+usage: live rm [-h] [-f] [-g] [--all-exited] [--older-than AGE] [selectors ...]
 
 Remove recorded sessions.
 
 positional arguments:
-  selectors     NAME(s) or UUID-prefix(es).
+  selectors         NAME(s) or UUID-prefix(es).
 
 options:
-  -h, --help    show this help message and exit
-  -f, --force   SIGTERM live runs; ignore missing.
-  -g, --global  Global scope.
-  --all-exited  Remove all dead sessions.
+  -h, --help        show this help message and exit
+  -f, --force       SIGTERM live runs; ignore missing.
+  -g, --global      Global scope.
+  --all-exited      Remove all dead sessions.
+  --older-than AGE  Restrict to sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.
 ```
 
 ## `live completion`
