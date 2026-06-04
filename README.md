@@ -51,3 +51,7 @@ live rm dev                   # delete
 - [REFERENCE.md](https://github.com/astralarium/live/blob/main/REFERENCE.md)
 - [DESIGN.md](https://github.com/astralarium/live/blob/main/DESIGN.md)
 - [DEVELOPMENT.md](https://github.com/astralarium/live/blob/main/DEVELOPMENT.md)
+
+## Links
+
+- [PyPI package: `live-cmd`](https://pypi.org/project/live-cmd/)
