@@ -30,7 +30,11 @@ _live_complete() {
     done
 
     if [ -z "$verb" ]; then
-        COMPREPLY=( $(compgen -W "run ls cat head tail rm llms.txt completion update-shell" -- "$cur") )
+        if [[ "$cur" == -* ]]; then
+            COMPREPLY=( $(compgen -W "--version" -- "$cur") )
+        else
+            COMPREPLY=( $(compgen -W "run ls cat head tail rm llms.txt completion update-shell" -- "$cur") )
+        fi
         return
     fi
 
@@ -42,7 +46,7 @@ _live_complete() {
             for ((i=verb_idx+1; i<cword; i++)); do
                 case "${words[i]}" in
                     --) seen_cmd=$((i+1)); break ;;
-                    -n) i=$((i+1)) ;;
+                    -n|--name) i=$((i+1)) ;;
                     -*) ;;
                     *) seen_cmd=$i; break ;;
                 esac
@@ -51,7 +55,7 @@ _live_complete() {
                 _command_offset $seen_cmd
                 return
             fi
-            COMPREPLY=( $(compgen -W "-n --" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-n --name --" -- "$cur") )
             ;;
         ls)
             if [[ "$cur" == -* ]]; then
@@ -125,6 +129,7 @@ _live() {
     typeset -A opt_args
 
     _arguments -C \
+        '--version[Show version and exit]' \
         '1: :_live_verbs' \
         '*::arg:->args' \
         && return 0
@@ -136,7 +141,7 @@ _live() {
                     # Complete our flag before the wrapped command; any non-flag
                     # word triggers `_normal` against the wrapped command.
                     _arguments -S \
-                        '-n+[session name]:name:' \
+                        {-n+,--name=}'[session name]:name:' \
                         '*::command:_normal'
                     ;;
                 ls)
@@ -262,6 +267,7 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete se
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent guide'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install completion for current shell'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -l version -d 'Show version and exit'
 
 # Selector completion for ls / cat / head / tail / rm.
 complete -c live -n "__fish_seen_subcommand_from ls cat head tail rm" -a "(__live_selectors)"
@@ -305,7 +311,7 @@ complete -c live -n "__fish_seen_subcommand_from rm" -l untitled -d 'Keep only u
 complete -c live -n "__fish_seen_subcommand_from rm" -l older-than -r -d 'Keep only sessions older than AGE'
 
 # run -- hand off after first non-flag token.
-complete -c live -n "__fish_seen_subcommand_from run" -s n -r -d 'Session name'
+complete -c live -n "__fish_seen_subcommand_from run" -s n -l name -r -d 'Session name'
 complete -c live -n "__fish_seen_subcommand_from run; and __fish_complete_subcommand --skip 2" \
     -a "(__fish_complete_subcommand --skip 2)"
 

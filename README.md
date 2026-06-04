@@ -12,10 +12,10 @@ pipx install live-cmd
 uv tool install live-cmd
 ```
 
-Shell completions:
+Install shell completions:
 
 ```bash
-live update-shell        # detect $SHELL, install completions
+live update-shell
 ```
 
 Agent guide:

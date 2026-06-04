@@ -177,7 +177,7 @@ def test_bash_run_offers_own_flags_before_command(
     run_live, tmp_path: Path
 ) -> None:
     """Before any wrapped command is typed, `live run -<TAB>` offers our own flags
-    (`-n`/`--`) — NOT a handoff to anything else."""
+    (`-n`/`--name`/`--`) — NOT a handoff to anything else."""
     script = run_live(tmp_path, "completion", "bash").stdout
     payload = tmp_path / "live.bash"
     payload.write_text(script)
@@ -197,7 +197,7 @@ printf '%s\\n' "${{COMPREPLY[@]}}"
     ).stdout
     assert "OFFSET_CALLED" not in out, f"handoff fired prematurely: {out!r}"
     assert "-n" in out.split(), out
-    assert "--name" not in out.split(), out
+    assert "--name" in out.split(), out
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")

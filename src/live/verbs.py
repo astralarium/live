@@ -453,17 +453,7 @@ def cmd_update_shell(args) -> int:
     print(f"installed {shell} completion -> {dst}")
     if hint:
         print(hint)
-    print(_activation_hint(shell))
     return 0
-
-
-def _activation_hint(shell: str) -> str:
-    if shell == "zsh":
-        # compinit caches in ~/.zcompdump — wipe it so the new _live is seen.
-        return "then reload: rm -f ~/.zcompdump* && exec zsh"
-    if shell == "bash":
-        return "then reload: exec bash"
-    return "open a new shell to pick up the change."
 
 
 def _detect_shell() -> str | None:
