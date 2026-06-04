@@ -30,29 +30,50 @@ def _count_or_cursor(prefix: str):
     return parse
 
 
+class _Formatter(argparse.HelpFormatter):
+    """Render `REMAINDER` positionals using their metavar instead of `...`."""
+
+    def _format_args(self, action, default_metavar):
+        if action.nargs == argparse.REMAINDER:
+            return "%s ..." % self._metavar_formatter(action, default_metavar)(1)
+        return super()._format_args(action, default_metavar)
+
+
 def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="live",
         description="Stream long-lived command output to coding agents.",
+        formatter_class=_Formatter,
         add_help=True,
     )
     p.add_argument("--version", action="version", version=f"live {__version__}")
     sub = p.add_subparsers(dest="verb", metavar="<verb>")
 
     # run
-    run_p = sub.add_parser("run", help="Run <cmd> under a PTY; record.")
+    run_p = sub.add_parser(
+        "run",
+        help="Run <cmd> under a PTY; record.",
+        description="Run a command under a PTY and record its output.",
+        formatter_class=_Formatter,
+    )
     run_p.add_argument(
         "-n", "--name", default=None, help="Session name."
     )
     run_p.add_argument(
         "cmd",
         nargs=argparse.REMAINDER,
+        metavar="cmd",
         help="Command to run; `--` for flag-starting commands.",
     )
     run_p.set_defaults(func=verbs.cmd_run)
 
     # ls
-    ls_p = sub.add_parser("ls", help="List sessions in scope.")
+    ls_p = sub.add_parser(
+        "ls",
+        help="List sessions in scope.",
+        description="List recorded sessions.",
+        formatter_class=_Formatter,
+    )
     ls_p.add_argument("-a", "--all", action="store_true", help="Include exited.")
     ls_p.add_argument(
         "-g",
@@ -68,7 +89,12 @@ def _make_parser() -> argparse.ArgumentParser:
     ls_p.set_defaults(func=verbs.cmd_ls)
 
     # cat
-    cat_p = sub.add_parser("cat", help="Concatenate session.")
+    cat_p = sub.add_parser(
+        "cat",
+        help="Concatenate session.",
+        description="Display a session's full output.",
+        formatter_class=_Formatter,
+    )
     cat_p.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
     cat_p.add_argument(
         "-g",
@@ -89,7 +115,12 @@ def _make_parser() -> argparse.ArgumentParser:
     cat_p.set_defaults(func=verbs.cmd_cat)
 
     # head
-    head_p = sub.add_parser("head", help="Head session.")
+    head_p = sub.add_parser(
+        "head",
+        help="Head session.",
+        description="Display the first part of a session.",
+        formatter_class=_Formatter,
+    )
     head_p.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
     head_p.add_argument(
         "-g",
@@ -134,7 +165,12 @@ def _make_parser() -> argparse.ArgumentParser:
     head_p.set_defaults(func=verbs.cmd_head)
 
     # tail
-    tail_p = sub.add_parser("tail", help="Tail session.")
+    tail_p = sub.add_parser(
+        "tail",
+        help="Tail session.",
+        description="Display the last part of a session.",
+        formatter_class=_Formatter,
+    )
     tail_p.add_argument(
         "-f", "--follow", action="store_true", help="Follow until exit."
     )
@@ -182,7 +218,12 @@ def _make_parser() -> argparse.ArgumentParser:
     tail_p.set_defaults(func=verbs.cmd_tail)
 
     # rm
-    rm_p = sub.add_parser("rm", help="Delete sessions.")
+    rm_p = sub.add_parser(
+        "rm",
+        help="Delete sessions.",
+        description="Remove recorded sessions.",
+        formatter_class=_Formatter,
+    )
     rm_p.add_argument(
         "-f",
         "--force",
@@ -207,18 +248,24 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     rm_p.set_defaults(func=verbs.cmd_rm)
 
-    # llms.txt
-    llms_p = sub.add_parser("llms.txt", help="Print agent guide.")
-    llms_p.set_defaults(func=verbs.cmd_llms_txt)
-
     # completion
-    comp_p = sub.add_parser("completion", help="Print shell completion script.")
-    comp_p.add_argument("shell", choices=["bash", "zsh", "fish"])
+    comp_p = sub.add_parser(
+        "completion",
+        help="Print shell completion script.",
+        description="Print a shell completion script.",
+        formatter_class=_Formatter,
+    )
+    comp_p.add_argument(
+        "shell", choices=["bash", "zsh", "fish"], help="Target shell."
+    )
     comp_p.set_defaults(func=verbs.cmd_completion)
 
     # update-shell
     up_p = sub.add_parser(
-        "update-shell", help="Install completion for the current shell."
+        "update-shell",
+        help="Install completion for the current shell.",
+        description="Install shell completion.",
+        formatter_class=_Formatter,
     )
     up_p.add_argument(
         "shell",
@@ -228,6 +275,15 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Target shell (default: $SHELL).",
     )
     up_p.set_defaults(func=verbs.cmd_update_shell)
+
+    # llms.txt
+    llms_p = sub.add_parser(
+        "llms.txt",
+        help="Print agent guide.",
+        description="Display the agent guide for live.",
+        formatter_class=_Formatter,
+    )
+    llms_p.set_defaults(func=verbs.cmd_llms_txt)
 
     return p
 

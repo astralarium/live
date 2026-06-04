@@ -1,5 +1,16 @@
 # `live` — command reference
 
+- [`live`](#live)
+- [`live run`](#live-run)
+- [`live ls`](#live-ls)
+- [`live cat`](#live-cat)
+- [`live head`](#live-head)
+- [`live tail`](#live-tail)
+- [`live rm`](#live-rm)
+- [`live completion`](#live-completion)
+- [`live update-shell`](#live-updateshell)
+- [`live llms.txt`](#live-llmstxt)
+
 ## `live`
 
 ```
@@ -15,9 +26,9 @@ positional arguments:
     head          Head session.
     tail          Tail session.
     rm            Delete sessions.
-    llms.txt      Print agent guide.
     completion    Print shell completion script.
     update-shell  Install completion for the current shell.
+    llms.txt      Print agent guide.
 
 options:
   -h, --help      show this help message and exit
@@ -27,7 +38,9 @@ options:
 ## `live run`
 
 ```
-usage: live run [-h] [-n NAME] ...
+usage: live run [-h] [-n NAME] cmd ...
+
+Run a command under a PTY and record its output.
 
 positional arguments:
   cmd              Command to run; `--` for flag-starting commands.
@@ -41,6 +54,8 @@ options:
 
 ```
 usage: live ls [-h] [-a] [-g] [--json] [selector]
+
+List recorded sessions.
 
 positional arguments:
   selector      NAME or UUID-prefix filter.
@@ -56,6 +71,8 @@ options:
 
 ```
 usage: live cat [-h] [-v] [-g] [--strip-ansi | --raw] selector
+
+Display a session's full output.
 
 positional arguments:
   selector       NAME or UUID-prefix.
@@ -74,6 +91,8 @@ options:
 usage: live head [-h] [-v] [-g] [--strip-ansi | --raw] [-n LINES | -c BYTES |
                  -t TIME]
                  selector
+
+Display the first part of a session.
 
 positional arguments:
   selector           NAME or UUID-prefix.
@@ -96,6 +115,8 @@ usage: live tail [-h] [-f] [-v] [-g] [--strip-ansi | --raw] [-n LINES |
                  -c BYTES | -t TIME]
                  selector
 
+Display the last part of a session.
+
 positional arguments:
   selector           NAME or UUID-prefix.
 
@@ -116,6 +137,8 @@ options:
 ```
 usage: live rm [-h] [-f] [-g] [--all-exited] [selectors ...]
 
+Remove recorded sessions.
+
 positional arguments:
   selectors     NAME(s) or UUID-prefix(es).
 
@@ -126,22 +149,15 @@ options:
   --all-exited  Remove all dead sessions.
 ```
 
-## `live llms.txt`
-
-```
-usage: live llms.txt [-h]
-
-options:
-  -h, --help  show this help message and exit
-```
-
 ## `live completion`
 
 ```
 usage: live completion [-h] {bash,zsh,fish}
 
+Print a shell completion script.
+
 positional arguments:
-  {bash,zsh,fish}
+  {bash,zsh,fish}  Target shell.
 
 options:
   -h, --help       show this help message and exit
@@ -152,11 +168,51 @@ options:
 ```
 usage: live update-shell [-h] [{bash,zsh,fish}]
 
+Install shell completion.
+
 positional arguments:
   {bash,zsh,fish}  Target shell (default: $SHELL).
 
 options:
   -h, --help       show this help message and exit
+```
+
+## `live llms.txt`
+
+```
+usage: live llms.txt [-h]
+
+Display the agent guide for live.
+
+options:
+  -h, --help  show this help message and exit
+```
+
+### Agent guide
+
+```
+This project uses `live`, a CLI streamer.
+
+List available sessions:
+  live ls [-a] [--json] [<SELECTOR>]
+
+Read output from a live session:
+  live tail -vn +<N> <SELECTOR>
+
+<SELECTOR>: UUID prefix or NAME (newest match)
+<N>: line number
+
+stdout: command stdout+stderr lines with n>=N
+stderr: live verbose output
+  trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
+  stop:    "live: exit-code=" or "live: exit=inconsistent"
+  hung:    "live: status=hung last-activity=<s>" (alive, but stalled)
+  gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
+  partial: "live: partial-line bytes=<k> age=<s>"
+
+Begin reading from +0. Continue reading with: next +<N> = <L>+1; reset <N>=0 if <uuid> changes (new session)
+
+Pipe output from `live tail` and `live cat` to tools like `grep`.
 ```
 
 ---
