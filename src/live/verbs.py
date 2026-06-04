@@ -153,7 +153,7 @@ def cmd_ls(args) -> int:
     rows = [
         (
             s.id[:8],
-            _fmt_time(s.exited_at) if s.exited_at is not None else "-",
+            _fmt_time(s.meta.started_at),
             s.status,
             s.meta.name or "-",
             _cwd_display(s.meta.cwd, scope),
