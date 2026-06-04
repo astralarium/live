@@ -31,13 +31,20 @@ def live_env(tmp_path: Path) -> dict:
 
 @pytest.fixture
 def run_live(live_env):
-    def _run(cwd: Path, *args: str, check: bool = True, **kw) -> subprocess.CompletedProcess:
+    """Run `live <args>` and capture output. Pass `text=False` for raw bytes."""
+    def _run(
+        cwd: Path,
+        *args: str,
+        check: bool = True,
+        text: bool = True,
+        **kw,
+    ) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, "-m", "live.cli", *args],
             cwd=str(cwd),
             env=live_env,
             capture_output=True,
-            text=True,
+            text=text,
             check=check,
             **kw,
         )
@@ -61,6 +68,24 @@ def wait_for():
                 return True
             time.sleep(interval)
         return False
+
+    return _impl
+
+
+@pytest.fixture
+def wait_for_session(project: Path, wait_for):
+    """Block until exactly one session directory appears under `~/.live/sessions/`.
+
+    Returns the session directory `Path`. Asserts on timeout.
+    """
+    def _impl(timeout: float = 5.0) -> Path:
+        sessions = project / ".live" / "sessions"
+        assert wait_for(
+            lambda: sessions.exists() and any(sessions.iterdir()),
+            timeout=timeout,
+        ), "no session directory appeared"
+        [d] = list(sessions.iterdir())
+        return d
 
     return _impl
 
@@ -96,3 +121,20 @@ def spawn_run(project: Path, live_env):
             except subprocess.TimeoutExpired:
                 p.kill()
                 p.wait(timeout=5)
+
+
+@pytest.fixture
+def live_shim(tmp_path: Path, live_env):
+    """Install a `live` shim on `$PATH` that re-execs `python -m live.cli`.
+
+    Needed when a test drives a completion script that itself shells out to
+    `live ls`. Returns the env dict (a copy of `live_env`) with `PATH` prepended.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    shim = bin_dir / "live"
+    shim.write_text(f'#!/bin/sh\nexec {sys.executable} -m live.cli "$@"\n')
+    shim.chmod(0o755)
+    env = dict(live_env)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    return env

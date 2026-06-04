@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import signal
 import subprocess
 import sys
@@ -12,16 +11,7 @@ from pathlib import Path
 import pytest
 
 
-def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
-
-
-def test_follow_streams_lines_as_they_arrive(project: Path, live_env) -> None:
+def test_follow_streams_lines_as_they_arrive(project: Path, live_env, wait_for) -> None:
     # A recorder that emits one line per ~150 ms for 2 seconds, then exits.
     script = (
         "for i in 1 2 3 4 5 6; do "
@@ -40,12 +30,12 @@ def test_follow_streams_lines_as_they_arrive(project: Path, live_env) -> None:
     try:
         # Wait until the session exists.
         sessions = project / ".live" / "sessions"
-        assert _wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
+        assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
         # Wait until at least one line is indexed so we have something to follow.
         [sess] = list(sessions.iterdir())
         idx = sess / "lines.0000.idx"
-        assert _wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
-                         timeout=5.0)
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+                        timeout=5.0)
 
         # Start the follower; should pick up subsequent lines and exit when recorder does.
         follower = subprocess.Popen(
@@ -76,7 +66,7 @@ def test_follow_streams_lines_as_they_arrive(project: Path, live_env) -> None:
             rec.wait(timeout=5)
 
 
-def test_follow_does_not_duplicate_partial_line(project: Path, live_env) -> None:
+def test_follow_does_not_duplicate_partial_line(project: Path, live_env, wait_for) -> None:
     # Recorder: complete line, then a partial prompt (no \n), sleep so the
     # partial sits there past several follower loop iterations, then complete
     # the partial line and exit. With the duplication bug, the follower would
@@ -98,11 +88,11 @@ def test_follow_does_not_duplicate_partial_line(project: Path, live_env) -> None
     )
     try:
         sessions = project / ".live" / "sessions"
-        assert _wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
+        assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
         [sess] = list(sessions.iterdir())
         idx = sess / "lines.0000.idx"
-        assert _wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
-                         timeout=5.0)
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+                        timeout=5.0)
 
         follower = subprocess.Popen(
             [sys.executable, "-m", "live.cli", "tail", "-f", "pdup"],
@@ -130,7 +120,7 @@ def test_follow_does_not_duplicate_partial_line(project: Path, live_env) -> None
             rec.wait(timeout=5)
 
 
-def test_follow_clean_exit_on_sigint(project: Path, live_env) -> None:
+def test_follow_clean_exit_on_sigint(project: Path, live_env, wait_for) -> None:
     # A long-running recorder.
     rec = subprocess.Popen(
         [sys.executable, "-m", "live.cli", "run", "-n", "long", "--",
@@ -142,11 +132,11 @@ def test_follow_clean_exit_on_sigint(project: Path, live_env) -> None:
     )
     try:
         sessions = project / ".live" / "sessions"
-        assert _wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
+        assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
         [sess] = list(sessions.iterdir())
-        assert _wait_for(lambda: (sess / "lines.0000.idx").stat().st_size >= 16
-                                  if (sess / "lines.0000.idx").exists() else False,
-                         timeout=5.0)
+        idx = sess / "lines.0000.idx"
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+                        timeout=5.0)
 
         follower = subprocess.Popen(
             [sys.executable, "-m", "live.cli", "tail", "-f", "long"],

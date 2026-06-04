@@ -1,68 +1,54 @@
-"""Hung-status surfacing via backdating the active idx mtime."""
+"""Hung-status surfacing and heartbeat liveness signal."""
 
 from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
-import sys
 import time
 from pathlib import Path
 
 
-def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
-
-
-def _wait_for_session(project: Path) -> Path:
-    sessions = project / ".live" / "sessions"
-    assert _wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
-    [d] = list(sessions.iterdir())
-    return d
+def _write_config(project: Path, **fields) -> None:
+    (project / ".live").mkdir(mode=0o700, exist_ok=True)
+    (project / ".live" / "config.json").write_text(json.dumps(fields))
 
 
 def test_ls_reports_hung_when_idx_mtime_is_stale(
-    project: Path, live_env, run_live
+    project: Path, run_live, spawn_run, wait_for, wait_for_session
 ) -> None:
     # Configure heartbeat to 1s so the hung threshold is 3s.
-    (project / ".live").mkdir(mode=0o700, exist_ok=True)
-    (project / ".live" / "config.json").write_text(
-        json.dumps({"heartbeatSec": 1})
-    )
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "live.cli", "run", "-n", "longrun", "--",
-         "sh", "-c", "echo started; sleep 60"],
-        cwd=str(project),
-        env=live_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        sess_dir = _wait_for_session(project)
-        idx = sess_dir / "lines.0000.idx"
-        assert _wait_for(lambda: idx.exists() and idx.stat().st_size > 0,
-                         timeout=8.0), "no indexed line ever appeared"
-        # Backdate the active idx by 10s -> well past 3 * heartbeatSec.
-        past = time.time() - 10
-        os.utime(idx, (past, past))
+    _write_config(project, heartbeatSec=1)
+    spawn_run("-n", "longrun")
+    sess_dir = wait_for_session()
+    idx = sess_dir / "lines.0000.idx"
+    assert wait_for(lambda: idx.exists() and idx.stat().st_size > 0,
+                    timeout=8.0), "no indexed line ever appeared"
+    # Backdate the active idx by 10s -> well past 3 * heartbeatSec.
+    past = time.time() - 10
+    os.utime(idx, (past, past))
 
-        ls = run_live(project, "ls", "--json")
-        info = json.loads(ls.stdout.strip().splitlines()[0])
-        assert info["status"] == "hung"
+    ls = run_live(project, "ls", "--json")
+    info = json.loads(ls.stdout.strip().splitlines()[0])
+    assert info["status"] == "hung"
 
-        # tail -v should also surface "status=hung last-activity=<s>".
-        tail = run_live(project, "tail", "-vn", "+0", "longrun")
-        assert "status=hung last-activity=" in tail.stderr
-    finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+    # tail -v should also surface "status=hung last-activity=<s>".
+    tail = run_live(project, "tail", "-vn", "+0", "longrun")
+    assert "status=hung last-activity=" in tail.stderr
+
+
+def test_heartbeat_advances_idx_mtime_while_silent(
+    project: Path, spawn_run, wait_for, wait_for_session
+) -> None:
+    """The recorder touches the active idx mtime every heartbeatSec even while
+    no bytes flow. With heartbeatSec=1, mtime should advance during a 2.5s
+    quiet window."""
+    _write_config(project, heartbeatSec=1)
+    spawn_run("-n", "beat")
+    sess_dir = wait_for_session()
+    idx = sess_dir / "lines.0000.idx"
+    assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+                    timeout=5.0), "no indexed line ever appeared"
+    t0 = idx.stat().st_mtime
+    time.sleep(2.5)
+    t1 = idx.stat().st_mtime
+    assert t1 > t0, f"idx mtime did not advance during silence: {t0} -> {t1}"

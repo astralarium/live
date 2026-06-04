@@ -10,19 +10,9 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
-
-
-def _wait_for(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
 
 
 CORE_VERBS = {"run", "ls", "cat", "tail", "rm", "completion"}
@@ -202,19 +192,11 @@ printf '%s\\n' "${{COMPREPLY[@]}}"
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
 def test_bash_ls_completes_only_active_sessions(
-    run_live, live_env, tmp_path: Path
+    run_live, live_env, live_shim, wait_for, tmp_path: Path
 ) -> None:
     """`live ls <TAB>` should suggest only running/hung sessions; `live ls -a <TAB>`
     must include exited; `live rm <TAB>` must include exited regardless of -a."""
-    # `live` shim on PATH so the completion's `live ls --json` call works.
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    shim = bin_dir / "live"
-    shim.write_text(f'#!/bin/sh\nexec {sys.executable} -m live.cli "$@"\n')
-    shim.chmod(0o755)
-    import os
-    test_env = dict(live_env)
-    test_env["PATH"] = f"{bin_dir}{os.pathsep}{test_env.get('PATH', '')}"
+    test_env = live_shim
 
     # Exited session.
     run_live(tmp_path, "run", "-n", "deadname", "--", "sh", "-c", "echo d")
@@ -229,7 +211,7 @@ def test_bash_ls_completes_only_active_sessions(
     )
     try:
         # Wait until the live session is registered as running.
-        assert _wait_for(
+        assert wait_for(
             lambda: "liverun" in run_live(tmp_path, "ls", "--json").stdout,
             timeout=8.0,
         ), "running session never appeared"
@@ -281,18 +263,11 @@ printf '%s\\n' "${{COMPREPLY[@]}}"
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
 def test_bash_numeric_values_dont_break_selector_completion(
-    run_live, live_env, tmp_path: Path
+    run_live, live_shim, tmp_path: Path
 ) -> None:
     """`live head -n -3 <TAB>` (and friends) must still complete selectors.
     Regression: the `-3` token must not be mistaken for a flag during dispatch."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    shim = bin_dir / "live"
-    shim.write_text(f'#!/bin/sh\nexec {sys.executable} -m live.cli "$@"\n')
-    shim.chmod(0o755)
-    import os
-    test_env = dict(live_env)
-    test_env["PATH"] = f"{bin_dir}{os.pathsep}{test_env.get('PATH', '')}"
+    test_env = live_shim
 
     run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
 

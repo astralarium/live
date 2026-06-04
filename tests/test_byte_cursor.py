@@ -56,3 +56,22 @@ def test_tail_c_minus_treated_as_count(project: Path, run_live) -> None:
     a = run_live(project, "tail", "-c", "5", "bc4").stdout
     b = run_live(project, "tail", "-c", "-5", "bc4").stdout
     assert a == b
+
+
+def test_tail_c_emits_last_k_bytes(project: Path, run_live) -> None:
+    """`tail -c K` emits exactly the last K bytes of the on-disk stream."""
+    run_live(project, "run", "-n", "bc5", "--", "sh", "-c",
+             "echo aaa; echo bbb; echo ccc")
+    full = run_live(project, "cat", "bc5", text=False).stdout
+    out = run_live(project, "tail", "-c", "5", "bc5", text=False).stdout
+    # On-disk: b"aaa\r\nbbb\r\nccc\r\n" = 15 bytes. Last 5 = b"ccc\r\n".
+    assert full == b"aaa\r\nbbb\r\nccc\r\n"
+    assert out == full[-5:]
+
+
+def test_tail_c_larger_than_stream_emits_all(project: Path, run_live) -> None:
+    """K bigger than the stream returns the whole stream, not an error."""
+    run_live(project, "run", "-n", "bc6", "--", "sh", "-c", "echo a")
+    full = run_live(project, "cat", "bc6", text=False).stdout
+    out = run_live(project, "tail", "-c", "9999", "bc6", text=False).stdout
+    assert out == full

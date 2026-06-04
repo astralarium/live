@@ -227,7 +227,14 @@ def list_sessions(
 
 
 class SelectorError(Exception):
-    """Raised on no-match or ambiguous-prefix selector resolution."""
+    """Raised on selector resolution failure."""
+
+    pass
+
+
+class NoSuchSelectorError(SelectorError):
+    """Raised when a selector matches no session. `rm -f` swallows this;
+    ambiguous-prefix errors still surface."""
 
     pass
 
@@ -242,7 +249,7 @@ def resolve_one(sessions: list[SessionInfo], token: str) -> SessionInfo:
         return name_matches[0]
     uuid_matches = [s for s in sessions if s.id.startswith(token)]
     if not uuid_matches:
-        raise SelectorError(f"no such session: {token}")
+        raise NoSuchSelectorError(f"no such session: {token}")
     if len(uuid_matches) > 1:
         ids = ", ".join(s.id[:8] for s in uuid_matches)
         raise SelectorError(f"ambiguous selector '{token}': matches {ids}")
@@ -259,7 +266,7 @@ def resolve_many(sessions: list[SessionInfo], token: str) -> list[SessionInfo]:
         return name_matches
     uuid_matches = [s for s in sessions if s.id.startswith(token)]
     if not uuid_matches:
-        raise SelectorError(f"no such session: {token}")
+        raise NoSuchSelectorError(f"no such session: {token}")
     if len(uuid_matches) > 1:
         ids = ", ".join(s.id[:8] for s in uuid_matches)
         raise SelectorError(f"ambiguous selector '{token}': matches {ids}")

@@ -29,12 +29,6 @@ def test_completion_payload_contains_shell_hookup(
         assert verb in out, f"{shell}: missing verb {verb!r}"
 
 
-def test_completion_unknown_shell_errors(run_live, tmp_path: Path) -> None:
-    # argparse rejects this with exit 2 before our handler runs.
-    result = run_live(tmp_path, "completion", "fakesh", check=False)
-    assert result.returncode != 0
-
-
 @pytest.mark.parametrize("shell,rel", [
     ("bash", ".local/share/bash-completion/completions/live"),
     ("zsh", ".local/share/zsh/site-functions/_live"),

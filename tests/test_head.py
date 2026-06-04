@@ -61,15 +61,11 @@ def test_head_n_minus_K_ge_total_is_empty(project: Path, run_live) -> None:
 
 
 def test_head_c_minus_drops_last_k_bytes(project: Path, run_live) -> None:
-    """`head -c -K` matches GNU: all bytes except the last K."""
+    """`head -c -K` matches GNU: all bytes except the last K (raw on-disk bytes)."""
     sel = _setup_session(project, run_live)
-    full = run_live(project, "cat", sel).stdout.encode("utf-8", "replace")
-    out = run_live(project, "head", "-c", "-5", sel).stdout.encode("utf-8", "replace")
-    # Both strings have collapsed \r\n -> \n via text-mode subprocess. Match on
-    # text-collapsed length: full minus 5 less than disk would be (off by \r count)
-    # — but at minimum, output must be shorter than full.
-    assert len(out) < len(full)
-    assert full.startswith(out)
+    full = run_live(project, "cat", sel, text=False).stdout
+    out = run_live(project, "head", "-c", "-5", sel, text=False).stdout
+    assert out == full[:-5]
 
 
 def test_head_n_plus_treated_as_count(project: Path, run_live) -> None:

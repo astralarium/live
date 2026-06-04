@@ -28,16 +28,9 @@ def test_parse_age_duration(value: str, seconds: float) -> None:
     assert before - seconds <= cutoff <= after - seconds
 
 
-def test_parse_age_iso_date() -> None:
-    cutoff = _parse_age("2026-01-01")
-    expected = datetime.fromisoformat("2026-01-01").timestamp()
-    assert math.isclose(cutoff, expected)
-
-
-def test_parse_age_iso_datetime() -> None:
-    cutoff = _parse_age("2026-01-01T12:00:00")
-    expected = datetime.fromisoformat("2026-01-01T12:00:00").timestamp()
-    assert math.isclose(cutoff, expected)
+@pytest.mark.parametrize("value", ["2026-01-01", "2026-01-01T12:00:00"])
+def test_parse_age_iso(value: str) -> None:
+    assert math.isclose(_parse_age(value), datetime.fromisoformat(value).timestamp())
 
 
 @pytest.mark.parametrize("value", ["7", "7days", "yesterday", "", "1d2h"])
@@ -171,6 +164,64 @@ def test_name_with_older_than(project: Path, run_live) -> None:
     rm = run_live(project, "rm", "alpha", "--older-than", "0s")
     assert rm.returncode == 0
     assert _ls_names(project, run_live) == {"beta"}
+
+
+# ----- multi-NAME and running-session guard -----
+
+
+def test_rm_name_matches_every_session_with_that_name(project: Path, run_live) -> None:
+    """`rm <name>` deletes every session bearing that name (resolve_many)."""
+    run_live(project, "run", "-n", "dup", "--", "sh", "-c", "echo 1")
+    run_live(project, "run", "-n", "dup", "--", "sh", "-c", "echo 2")
+    run_live(project, "run", "-n", "keep", "--", "sh", "-c", "echo 3")
+
+    rm = run_live(project, "rm", "dup")
+    assert rm.returncode == 0
+    assert len(rm.stdout.strip().splitlines()) == 2
+    assert _ls_names(project, run_live) == {"keep"}
+
+
+def test_rm_running_session_refuses_without_force(
+    project: Path, run_live, spawn_run, wait_for, wait_for_session
+) -> None:
+    """`rm <running-name>` without -f leaves the session intact and exits 1."""
+    spawn_run("-n", "alive")
+    sess_dir = wait_for_session()
+    assert wait_for(lambda: (sess_dir / "meta.json").exists())
+
+    rm = run_live(project, "rm", "alive", check=False)
+    assert rm.returncode == 1
+    assert "is running" in rm.stderr
+    assert sess_dir.exists()
+    assert _ls_names(project, run_live) == {"alive"}
+
+
+# ----- -f / ignore-missing -----
+
+
+def test_rm_f_ignores_missing_selector(project: Path, run_live) -> None:
+    """`rm -f nonexistent` is a no-op, mirroring Unix `rm -f`."""
+    run_live(project, "run", "-n", "real", "--", "sh", "-c", "echo r")
+    rm = run_live(project, "rm", "-f", "nonexistent")
+    assert rm.returncode == 0
+    assert rm.stderr == ""
+    assert _ls_names(project, run_live) == {"real"}
+
+
+def test_rm_f_with_mix_of_missing_and_present(project: Path, run_live) -> None:
+    """`rm -f <missing> <real>` removes the real, silently skips the missing."""
+    run_live(project, "run", "-n", "real", "--", "sh", "-c", "echo r")
+    rm = run_live(project, "rm", "-f", "nope", "real")
+    assert rm.returncode == 0
+    assert _ls_names(project, run_live) == set()
+
+
+def test_rm_without_f_errors_on_missing_selector(project: Path, run_live) -> None:
+    """Sanity check: without -f, a missing selector still surfaces as an error."""
+    run_live(project, "run", "-n", "real", "--", "sh", "-c", "echo r")
+    rm = run_live(project, "rm", "nope", check=False)
+    assert rm.returncode == 1
+    assert "no such session" in rm.stderr
 
 
 # ----- intersect over orthogonal axes -----

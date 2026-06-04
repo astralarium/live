@@ -29,6 +29,7 @@ from .reader import (
 from .recorder import record
 from .session import (
     STATUS_DEAD,
+    NoSuchSelectorError,
     SelectorError,
     SessionInfo,
     list_sessions,
@@ -343,6 +344,11 @@ def cmd_rm(args) -> int:
     for token in args.selectors or []:
         try:
             base.extend(resolve_many(sessions, token))
+        except NoSuchSelectorError as e:
+            if args.force:
+                continue
+            _err(str(e))
+            any_error = True
         except SelectorError as e:
             _err(str(e))
             any_error = True
