@@ -6,7 +6,7 @@ Requires Python 3.14+. Zero dependencies.
 
 ## Install
 
-```sh
+```bash
 pipx install live-cmd
 # or
 uv tool install live-cmd
@@ -14,25 +14,36 @@ uv tool install live-cmd
 
 Shell completions:
 
-```sh
+```bash
 live update-shell        # detect $SHELL, install completions
 ```
 
 Agent guide:
 
-```sh
+```bash
 live llms.txt
 ```
 
 ## Usage
 
-```sh
-live run -n dev npm run dev   # record under PTY, mirror to terminal
-# switch terminals / agent tooling
-live ls                       # list sessions started under cwd
-live tail -vn +0 dev          # resumable polling for agents
-live cat dev                  # full output
-live rm dev                   # delete
+Record any command:
+
+```bash
+live run -n server npm start
+```
+
+Inspect from another process:
+
+```bash
+live cat server
+live tail -f server
+```
+
+Manage session recordings:
+
+```bash
+live ls
+live rm server
 ```
 
 ## Config
