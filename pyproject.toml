@@ -3,13 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "astralarya-live"
+name = "live-stream"
 version = "0.1.0"
-description = "Stream long-lived command output to coding agents."
+description = "Live stream command line output."
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "MIT" }
-authors = [{ name = "astralarya" }]
+authors = [{ name = "Mara Kim" }]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX",
@@ -20,7 +20,7 @@ classifiers = [
 live = "live.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/astralarya/live"
+Homepage = "https://github.com/astralarium/live"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/live"]

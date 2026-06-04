@@ -4,7 +4,7 @@ Stream long-lived command output to coding agents. `live run <cmd>` runs `<cmd>`
 
 The recorder is the sole writer per session and holds an exclusive `flock` on `process.lock` for its lifetime — that lock IS the liveness signal. Read verbs hold no per-process state and piggyback lifecycle sweeps. No daemon, no broker, no persistent server.
 
-Python 3.14+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, ioctl, signals, atomic rename, struct packing, JSON, UUIDv7, and the kqueue/inotify primitives that power `tail -f` are all stdlib. PyPI: `astralarya-live`.
+Python 3.14+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, ioctl, signals, atomic rename, struct packing, JSON, UUIDv7, and the kqueue/inotify primitives that power `tail -f` are all stdlib. PyPI: `live-stream`.
 
 ## CLI
 

@@ -1,15 +1,15 @@
 # live
 
-Stream long-lived command output to coding agents.
+Live stream command line output.
 
 See [DESIGN.md](DESIGN.md) for the design spec and [DEVELOPMENT.md](DEVELOPMENT.md) for working on `live` itself.
 
 ## Install
 
 ```sh
-pipx install astralarya-live
+pipx install live-stream
 # or
-uv tool install astralarya-live
+uv tool install live-stream
 ```
 
 ## Usage

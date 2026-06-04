@@ -43,16 +43,16 @@ Some completion tests are skipped unless `bash`, `zsh`, and/or `fish` are on `$P
 4. Sanity-check the wheel installs cleanly in a throwaway env:
 
     ```sh
-    uv tool install --from dist/astralarya_live-X.Y.Z-py3-none-any.whl astralarya-live
+    uv tool install --from dist/live_stream-X.Y.Z-py3-none-any.whl live-stream
     live --version
-    uv tool uninstall astralarya-live
+    uv tool uninstall live-stream
     ```
 
 5. Publish to TestPyPI first, install from it, smoke-test:
 
     ```sh
     uv publish --publish-url https://test.pypi.org/legacy/ --token "$TESTPYPI_TOKEN"
-    uv tool install --index https://test.pypi.org/simple/ astralarya-live
+    uv tool install --index https://test.pypi.org/simple/ live-stream
     ```
 
 6. Publish to PyPI:
@@ -61,4 +61,4 @@ Some completion tests are skipped unless `bash`, `zsh`, and/or `fish` are on `$P
     uv publish --token "$PYPI_TOKEN"
     ```
 
-API tokens come from <https://pypi.org/manage/account/token/> (and the TestPyPI equivalent). Scope them to the `astralarya-live` project once it's been registered.
+API tokens come from <https://pypi.org/manage/account/token/> (and the TestPyPI equivalent). Scope them to the `live-stream` project once it's been registered.
