@@ -137,6 +137,7 @@ class _Recorder:
         if winsize is not None:
             self._set_winsize(self.master_fd, winsize)
 
+        self._set_terminal_title()
         self._install_signals()
         self._raw_stdin()
         try:
@@ -155,6 +156,17 @@ class _Recorder:
     def _set_winsize(self, fd: int, winsize: bytes) -> None:
         try:
             fcntl.ioctl(fd, TIOCSWINSZ, winsize)
+        except OSError:
+            pass
+
+    def _set_terminal_title(self) -> None:
+        # OSC 0 ; <text> BEL — without this, terminals that derive the tab
+        # title from the foreground process (notably VSCode) show "Python".
+        if not os.isatty(1):
+            return
+        title = os.path.basename(self.command[0]) or self.command[0]
+        try:
+            os.write(1, f"\x1b]0;{title}\x07".encode("utf-8", "replace"))
         except OSError:
             pass
 
