@@ -373,6 +373,8 @@ def cmd_rm(args) -> int:
         except Exception as e:
             _err(f"rm {s.id[:8]}: {e}")
             any_error = True
+            continue
+        print(s.id)
 
     return 1 if any_error else 0
 
