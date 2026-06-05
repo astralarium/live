@@ -9,7 +9,8 @@ from pathlib import Path
 
 from live.config import Config
 from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME, Meta, Watermarks
-from live.session import SessionInfo, sweep_one
+from live.session import SessionInfo, sweep_all, sweep_one
+from live.state import SWEEP_INTERVAL_SEC, last_sweep_time, mark_swept, state_path
 from live.verbose import emit_exit
 
 
@@ -87,6 +88,50 @@ def test_sweep_negative_ttl_never_deletes(tmp_path: Path) -> None:
 
     assert sess.exists()
     assert dead.exists()
+
+
+# ----- sweep_all throttle -----
+
+
+def test_sweep_all_stamps_lastsweeptime(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    before = time.time()
+    sweep_all(_cfg())
+    after = time.time()
+    t = last_sweep_time()
+    assert before <= t <= after
+    assert state_path().exists()
+
+
+def test_sweep_all_skips_when_within_interval(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Pre-stamp a recent sweep so the throttle short-circuits.
+    mark_swept()
+    stamped = last_sweep_time()
+    # Plant a dead-but-unmarked session; sweep_all would normally stamp it.
+    sessions = tmp_path / ".live" / "sessions"
+    sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
+    sess = _stub_session(sessions)
+    (sess / LOCK_NAME).write_text("99999\n")
+
+    sweep_all(_cfg())
+
+    assert not (sess / DEAD_NAME).exists()  # throttle skipped the work
+    assert last_sweep_time() == stamped     # timestamp unchanged
+
+
+def test_sweep_all_runs_when_interval_elapsed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Stamp a sweep older than the throttle window.
+    mark_swept(now=time.time() - SWEEP_INTERVAL_SEC - 1)
+    sessions = tmp_path / ".live" / "sessions"
+    sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
+    sess = _stub_session(sessions)
+    (sess / LOCK_NAME).write_text("99999\n")
+
+    sweep_all(_cfg())
+
+    assert (sess / DEAD_NAME).exists()
 
 
 # ----- exit-status helper -----

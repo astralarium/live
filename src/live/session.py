@@ -25,6 +25,7 @@ from .format import (
 )
 from .lock import probe_held
 from .paths import sessions_dir, within_cwd
+from .state import mark_swept, should_sweep
 
 
 STATUS_DEAD = ("exited", "inconsistent")
@@ -110,6 +111,11 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
 
 
 def sweep_all(cfg: Config) -> None:
+    """Sweep every session directory. Throttled to once per
+    `state.SWEEP_INTERVAL_SEC` via `~/.live/state.json`."""
+    if not should_sweep():
+        return
+    mark_swept()
     sdir = sessions_dir()
     try:
         entries = list(os.scandir(sdir))

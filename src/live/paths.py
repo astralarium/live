@@ -5,6 +5,7 @@ from pathlib import Path
 
 SESSIONS_SUBDIR = "sessions"
 CONFIG_NAME = "config.json"
+STATE_NAME = "state.json"
 
 
 def live_dir() -> Path:
@@ -23,6 +24,10 @@ def sessions_dir() -> Path:
 
 def config_path() -> Path:
     return live_dir() / CONFIG_NAME
+
+
+def state_path() -> Path:
+    return live_dir() / STATE_NAME
 
 
 def session_dir(session_id: str) -> Path:
