@@ -426,15 +426,15 @@ stdout: command stdout+stderr (merged)
 
 stderr: live verbose output (-v):
   trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
-  stop:    "live: exit-code=" or "live: exit=inconsistent"
-  hung:    "live: status=hung last-activity=<s>" (alive, but stalled)
-  gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
+  stop: "live: exit-code=" or "live: exit=inconsistent"
+  hung: "live: status=hung last-activity=<s>" (alive, but stalled)
+  gap: "live: dropped <k> lines (since=<N>, first retained=<F>)"
   partial: "live: partial-line bytes=<k> age=<s>"
 
-Continue reading a session:
+Check for new data from a session:
   live tail -vn +<N> <SELECTOR>
 
-with +<N> = <L>+1
+set +<N> = <L>+1 from last read
 reset <N>=0 if <uuid> changes (new session)
 """
 

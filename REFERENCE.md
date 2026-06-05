@@ -195,23 +195,26 @@ This project uses `live`, a CLI streamer.
 List available sessions:
   live ls [-a] [--json] [<SELECTOR>]
 
-Read output from a live session:
-  live tail -vn +<N> <SELECTOR>
-
 <SELECTOR>: UUID prefix or NAME (newest match)
-<N>: line number
 
-stdout: command stdout+stderr lines with n>=N
-stderr: live verbose output
+Read output from a session:
+  live cat -v <SELECTOR>
+  live head -v <SELECTOR>
+
+stdout: command stdout+stderr (merged)
+
+stderr: live verbose output (-v):
   trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
-  stop:    "live: exit-code=" or "live: exit=inconsistent"
-  hung:    "live: status=hung last-activity=<s>" (alive, but stalled)
-  gap:     "live: dropped <k> lines (since=<N>, first retained=<F>)"
+  stop: "live: exit-code=" or "live: exit=inconsistent"
+  hung: "live: status=hung last-activity=<s>" (alive, but stalled)
+  gap: "live: dropped <k> lines (since=<N>, first retained=<F>)"
   partial: "live: partial-line bytes=<k> age=<s>"
 
-Begin reading from +0. Continue reading with: next +<N> = <L>+1; reset <N>=0 if <uuid> changes (new session)
+Check for new data from a session:
+  live tail -vn +<N> <SELECTOR>
 
-Pipe output from `live tail` and `live cat` to tools like `grep`.
+set +<N> = <L>+1 from last read
+reset <N>=0 if <uuid> changes (new session)
 ```
 
 ---
