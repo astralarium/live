@@ -40,6 +40,7 @@ Inspect from another process:
 ```bash
 live cat server
 live tail -f server
+live less server
 ```
 
 Manage session recordings:
