@@ -69,4 +69,5 @@ live rm server
 
 ## Links
 
+- [GitHub: `astralarium/live`](https://github.com/astralarium/live)
 - [PyPI package: `live-cmd`](https://pypi.org/project/live-cmd/)
