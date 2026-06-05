@@ -1,9 +1,12 @@
 # live
 
-Live stream command line output. Inspect long processes from agent workflows.
+Live stream command line output.
 
+Explore logs from long-running or long-dead processes interactively.
+Agents use tools with familiar interfaces like `live cat` and `live tail`.
+
+Large logs auto-rotate. Old sessions are cleaned opportunistically after a week.
 File based persistence stored in `~/.live`. There are no long running daemons.
-Large logs auto-rotate. Old sessions are cleaned opportunistically.
 
 Requires Python 3.10+. Zero dependencies.
 
