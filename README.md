@@ -2,6 +2,8 @@
 
 Live stream command line output. Inspect long processes from agent workflows.
 
+Large logs auto-rotate, and old sessions are auto-cleaned.
+
 Requires Python 3.10+. Zero dependencies.
 
 ## Install
