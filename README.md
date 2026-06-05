@@ -35,12 +35,17 @@ Record any command:
 live run -n server npm start
 ```
 
-Inspect from another process:
+Page logs from another process:
 
 ```bash
-live cat server
-live tail -f server
 live less server
+```
+
+Resumable streaming for agents (`-v`) using POSIX semantics:
+
+```bash
+live cat -v server
+live tail -vN +0 server
 ```
 
 Manage session recordings:
