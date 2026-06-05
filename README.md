@@ -2,8 +2,8 @@
 
 Live stream command line output.
 
-Explore logs from long-running or long-dead processes interactively.
-Agents use tools with familiar interfaces like `live cat` and `live tail`.
+Enable agents to inspect logs via familiar interfaces like `cat` and `tail`.
+Explore logs from long-running or long-dead processes.
 
 Large logs auto-rotate. Old sessions are cleaned opportunistically after a week.
 File based persistence stored in `~/.live`. There are no long running daemons.
