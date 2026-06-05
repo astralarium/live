@@ -219,7 +219,7 @@ _live_verbs() {
     local -a verbs
     verbs=(
         'run:Run <cmd> under a PTY; record.'
-        'ls:List sessions in scope.'
+        'ls:List sessions.'
         'cat:Concatenate session.'
         'head:Head session.'
         'tail:Tail session.'
@@ -227,7 +227,7 @@ _live_verbs() {
         'rm:Delete sessions.'
         'llms.txt:Print agent instructions.'
         'completion:Print shell completion script.'
-        'update-shell:Install completion for the current shell.'
+        'update-shell:Install shell completions.'
     )
     _describe -t verbs 'verb' verbs
 }
@@ -275,7 +275,7 @@ set -l verbs run ls cat head tail less rm llms.txt completion update-shell
 
 complete -c live -f
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Run <cmd> under a PTY; record.'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a ls -d 'List sessions in scope.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a ls -d 'List sessions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a cat -d 'Concatenate session.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a head -d 'Head session.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail session.'
@@ -283,7 +283,7 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a less -d 'Page se
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent instructions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print shell completion script.'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install completion for the current shell.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install shell completions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -l version -d 'Show version and exit.'
 
 # Selector completion for ls / cat / head / tail / less / rm.
@@ -327,7 +327,7 @@ complete -c live -n "__fish_seen_subcommand_from tail" -s t -l time -r -d 'Lines
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'SIGTERM live runs; ignore missing.'
 complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Global scope.'
-complete -c live -n "__fish_seen_subcommand_from rm" -l all -d 'Delete all sessions in scope.'
+complete -c live -n "__fish_seen_subcommand_from rm" -l all -d 'Delete all sessions.'
 complete -c live -n "__fish_seen_subcommand_from rm" -l exited -d 'Delete exited sessions.'
 complete -c live -n "__fish_seen_subcommand_from rm" -l untitled -d 'Delete unnamed sessions.'
 complete -c live -n "__fish_seen_subcommand_from rm" -l older-than -r -d 'Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.'

@@ -67,7 +67,7 @@ class _Formatter(argparse.HelpFormatter):
 def _make_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="live",
-        description="Live stream command line output. Inspect long processes from agent workflows.",
+        description="Live stream command line output.",
         formatter_class=_Formatter,
         add_help=True,
     )
@@ -86,14 +86,14 @@ def _make_parser() -> argparse.ArgumentParser:
         "cmd",
         nargs=argparse.REMAINDER,
         metavar="cmd",
-        help="Command to run; `--` for flag-starting commands.",
+        help="Command to run; `--` wraps subsequent arguments.",
     )
     run_p.set_defaults(func=verbs.cmd_run)
 
     # ls
     ls_p = sub.add_parser(
         "ls",
-        help="List sessions in scope.",
+        help="List sessions.",
         description="List recorded sessions.",
         formatter_class=_Formatter,
     )
@@ -244,7 +244,7 @@ def _make_parser() -> argparse.ArgumentParser:
     less_p = sub.add_parser(
         "less",
         help="Page session.",
-        description="Page session in an interactive viewer.",
+        description="Page session interactively.",
         formatter_class=_Formatter,
     )
     less_p.add_argument(
@@ -289,7 +289,7 @@ def _make_parser() -> argparse.ArgumentParser:
         "--all",
         action="store_true",
         dest="all_",
-        help="Delete all sessions in scope.",
+        help="Delete all sessions.",
     )
     rm_p.add_argument(
         "--exited",
@@ -316,7 +316,7 @@ def _make_parser() -> argparse.ArgumentParser:
     comp_p = sub.add_parser(
         "completion",
         help="Print shell completion script.",
-        description="Print a shell completion script.",
+        description="Print shell completion script.",
         formatter_class=_Formatter,
     )
     comp_p.add_argument("shell", choices=["bash", "zsh", "fish"], help="Target shell.")
@@ -325,8 +325,8 @@ def _make_parser() -> argparse.ArgumentParser:
     # update-shell
     up_p = sub.add_parser(
         "update-shell",
-        help="Install completion for the current shell.",
-        description="Install shell completion.",
+        help="Install shell completions.",
+        description="Install shell completions.",
         formatter_class=_Formatter,
     )
     up_p.add_argument(

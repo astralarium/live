@@ -17,19 +17,19 @@
 ```
 usage: live [-h] [--version] <verb> ...
 
-Live stream command line output. Inspect long processes from agent workflows.
+Live stream command line output.
 
 positional arguments:
   <verb>
     run           Run <cmd> under a PTY; record.
-    ls            List sessions in scope.
+    ls            List sessions.
     cat           Concatenate session.
     head          Head session.
     tail          Tail session.
     less          Page session.
     rm            Delete sessions.
     completion    Print shell completion script.
-    update-shell  Install completion for the current shell.
+    update-shell  Install shell completions.
     llms.txt      Print agent instructions.
 
 options:
@@ -45,7 +45,7 @@ usage: live run [-h] [-n NAME] cmd ...
 Run a command under a PTY and record its output.
 
 positional arguments:
-  cmd              Command to run; `--` for flag-starting commands.
+  cmd              Command to run; `--` wraps subsequent arguments.
 
 options:
   -h, --help       show this help message and exit
@@ -135,7 +135,7 @@ options:
 ```
 usage: live less [-h] [-g] [--strip-ansi | --raw] selector
 
-Page session in an interactive viewer.
+Page session interactively.
 
 positional arguments:
   selector      NAME or UUID-prefix.
@@ -161,7 +161,7 @@ options:
   -h, --help        show this help message and exit
   -f, --force       SIGTERM live runs; ignore missing.
   -g, --global      Global scope.
-  --all             Delete all sessions in scope.
+  --all             Delete all sessions.
   --exited          Delete exited sessions.
   --untitled        Delete unnamed sessions.
   --older-than AGE  Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.
@@ -172,7 +172,7 @@ options:
 ```
 usage: live completion [-h] {bash,zsh,fish}
 
-Print a shell completion script.
+Print shell completion script.
 
 positional arguments:
   {bash,zsh,fish}  Target shell.
@@ -186,7 +186,7 @@ options:
 ```
 usage: live update-shell [-h] [{bash,zsh,fish}]
 
-Install shell completion.
+Install shell completions.
 
 positional arguments:
   {bash,zsh,fish}  Target shell (default: $SHELL).
