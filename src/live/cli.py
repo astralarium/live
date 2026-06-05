@@ -240,6 +240,31 @@ def _make_parser() -> argparse.ArgumentParser:
     tail_p.add_argument("selector", help="NAME or UUID-prefix.")
     tail_p.set_defaults(func=verbs.cmd_tail)
 
+    # less
+    less_p = sub.add_parser(
+        "less",
+        help="Page session.",
+        description="Page session in an interactive viewer.",
+        formatter_class=_Formatter,
+    )
+    less_p.add_argument(
+        "-g",
+        "--global",
+        action="store_true",
+        dest="global_",
+        help="Global scope.",
+    )
+    ag = less_p.add_mutually_exclusive_group()
+    ag.add_argument(
+        "--strip-ansi",
+        action="store_true",
+        dest="strip_ansi",
+        help="Strip ANSI.",
+    )
+    ag.add_argument("--raw", action="store_true", dest="raw", help="Keep ANSI.")
+    less_p.add_argument("selector", help="NAME or UUID-prefix.")
+    less_p.set_defaults(func=verbs.cmd_less)
+
     # rm
     rm_p = sub.add_parser(
         "rm",

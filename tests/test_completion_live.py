@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 
-CORE_VERBS = {"run", "ls", "cat", "tail", "rm", "completion"}
+CORE_VERBS = {"run", "ls", "cat", "head", "tail", "less", "rm", "completion"}
 
 
 def _have(shell: str) -> bool:

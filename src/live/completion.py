@@ -3,9 +3,10 @@
 Each script offers verb completion, per-verb flag completion, selector
 completion (NAME or UUID via `live ls --json`), and `live run <TAB>` handoff
 to the wrapped command's completion. The selector helper mirrors the verb's
-scope flags: `ls` only suggests active sessions unless `-a` was typed;
-`cat`/`tail`/`rm` always pass `-a` since exited sessions remain valid
-targets. `-g` is honored when present in the command line.
+scope flags: `ls` only suggests active sessions unless `-a` was typed; the
+read verbs (`cat`/`head`/`tail`/`less`/`rm`) always pass `-a` since exited
+sessions remain valid targets. `-g` is honored when present in the command
+line.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ _live_complete() {
         if [[ "$cur" == -* ]]; then
             COMPREPLY=( $(compgen -W "--version" -- "$cur") )
         else
-            COMPREPLY=( $(compgen -W "run ls cat head tail rm llms.txt completion update-shell" -- "$cur") )
+            COMPREPLY=( $(compgen -W "run ls cat head tail less rm llms.txt completion update-shell" -- "$cur") )
         fi
         return
     fi
@@ -67,6 +68,13 @@ _live_complete() {
         cat)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-v --verbose -g --global --strip-ansi --raw" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
+            fi
+            ;;
+        less)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "-g --global --strip-ansi --raw" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
             fi
@@ -159,6 +167,13 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '1:selector:_live_selectors'
                     ;;
+                less)
+                    _arguments \
+                        '(-g --global)'{-g,--global} \
+                        '(--strip-ansi --raw)--strip-ansi' \
+                        '(--strip-ansi --raw)--raw' \
+                        '1:selector:_live_selectors'
+                    ;;
                 head)
                     _arguments \
                         '(-v --verbose)'{-v,--verbose} \
@@ -203,15 +218,16 @@ _live() {
 _live_verbs() {
     local -a verbs
     verbs=(
-        'run:Wrap <cmd> under a PTY and record'
-        'ls:List sessions in scope'
-        'cat:Concatenate stream.*.log for a session'
-        'head:Head first lines of a session'
-        'tail:Tail a session'
-        'rm:Delete sessions'
-        'llms.txt:Print a token-minimal agent guide'
-        'completion:Print shell completion script'
-        'update-shell:Install completion for the current shell'
+        'run:Run <cmd> under a PTY; record.'
+        'ls:List sessions in scope.'
+        'cat:Concatenate session.'
+        'head:Head session.'
+        'tail:Tail session.'
+        'less:Page session.'
+        'rm:Delete sessions.'
+        'llms.txt:Print agent instructions.'
+        'completion:Print shell completion script.'
+        'update-shell:Install completion for the current shell.'
     )
     _describe -t verbs 'verb' verbs
 }
@@ -255,63 +271,69 @@ function __live_selectors
     live ls $args --json 2>/dev/null | string match -rga '"(?:id|name)":"([^"]+)"' | sort -u
 end
 
-set -l verbs run ls cat head tail rm llms.txt completion update-shell
+set -l verbs run ls cat head tail less rm llms.txt completion update-shell
 
 complete -c live -f
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Wrap <cmd> under a PTY'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a ls -d 'List sessions'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a cat -d 'Concatenate stream.*.log'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a head -d 'Head first lines of a session'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail a session'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent guide'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print completion script'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install completion for current shell'
-complete -c live -n "not __fish_seen_subcommand_from $verbs" -l version -d 'Show version and exit'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Run <cmd> under a PTY; record.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a ls -d 'List sessions in scope.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a cat -d 'Concatenate session.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a head -d 'Head session.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail session.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a less -d 'Page session.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent instructions.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print shell completion script.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install completion for the current shell.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -l version -d 'Show version and exit.'
 
-# Selector completion for ls / cat / head / tail / rm.
-complete -c live -n "__fish_seen_subcommand_from ls cat head tail rm" -a "(__live_selectors)"
+# Selector completion for ls / cat / head / tail / less / rm.
+complete -c live -n "__fish_seen_subcommand_from ls cat head tail less rm" -a "(__live_selectors)"
 
 # ls
-complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited sessions'
-complete -c live -n "__fish_seen_subcommand_from ls" -s g -l global -d 'Show sessions from all directories'
-complete -c live -n "__fish_seen_subcommand_from ls" -l json -d 'Emit NDJSON'
+complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited.'
+complete -c live -n "__fish_seen_subcommand_from ls" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from ls" -l json -d 'Emit NDJSON.'
 
 # cat
-complete -c live -n "__fish_seen_subcommand_from cat" -s v -l verbose -d 'Add stderr metadata'
-complete -c live -n "__fish_seen_subcommand_from cat" -s g -l global -d 'Resolve selector globally'
-complete -c live -n "__fish_seen_subcommand_from cat" -l strip-ansi -d 'Remove ANSI escapes'
-complete -c live -n "__fish_seen_subcommand_from cat" -l raw -d 'Keep ANSI escapes'
+complete -c live -n "__fish_seen_subcommand_from cat" -s v -l verbose -d 'Verbose output.'
+complete -c live -n "__fish_seen_subcommand_from cat" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from cat" -l strip-ansi -d 'Strip ANSI.'
+complete -c live -n "__fish_seen_subcommand_from cat" -l raw -d 'Keep ANSI.'
+
+# less
+complete -c live -n "__fish_seen_subcommand_from less" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from less" -l strip-ansi -d 'Strip ANSI.'
+complete -c live -n "__fish_seen_subcommand_from less" -l raw -d 'Keep ANSI.'
 
 # head
-complete -c live -n "__fish_seen_subcommand_from head" -s v -l verbose
-complete -c live -n "__fish_seen_subcommand_from head" -s g -l global -d 'Resolve selector globally'
-complete -c live -n "__fish_seen_subcommand_from head" -l strip-ansi
-complete -c live -n "__fish_seen_subcommand_from head" -l raw
-complete -c live -n "__fish_seen_subcommand_from head" -s n -l lines -r -d 'First N lines (default 10)'
-complete -c live -n "__fish_seen_subcommand_from head" -s c -l bytes -r -d 'First K bytes'
-complete -c live -n "__fish_seen_subcommand_from head" -s t -l time -r -d 'Lines with t <= T (epoch seconds)'
+complete -c live -n "__fish_seen_subcommand_from head" -s v -l verbose -d 'Verbose output.'
+complete -c live -n "__fish_seen_subcommand_from head" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from head" -l strip-ansi -d 'Strip ANSI.'
+complete -c live -n "__fish_seen_subcommand_from head" -l raw -d 'Keep ANSI.'
+complete -c live -n "__fish_seen_subcommand_from head" -s n -l lines -r -d 'First N lines (default 10); -N drops last N.'
+complete -c live -n "__fish_seen_subcommand_from head" -s c -l bytes -r -d 'First K bytes; -K drops last K.'
+complete -c live -n "__fish_seen_subcommand_from head" -s t -l time -r -d 'Lines with idx t <= T (epoch).'
 
 # tail
-complete -c live -n "__fish_seen_subcommand_from tail" -s v -l verbose
-complete -c live -n "__fish_seen_subcommand_from tail" -s f -l follow -d 'Follow new lines'
-complete -c live -n "__fish_seen_subcommand_from tail" -s g -l global -d 'Resolve selector globally'
-complete -c live -n "__fish_seen_subcommand_from tail" -l strip-ansi
-complete -c live -n "__fish_seen_subcommand_from tail" -l raw
-complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last N lines'
-complete -c live -n "__fish_seen_subcommand_from tail" -s c -l bytes -r -d 'Last K bytes'
-complete -c live -n "__fish_seen_subcommand_from tail" -s t -l time -r -d 'Time cursor (epoch seconds)'
+complete -c live -n "__fish_seen_subcommand_from tail" -s v -l verbose -d 'Verbose output.'
+complete -c live -n "__fish_seen_subcommand_from tail" -s f -l follow -d 'Follow until exit.'
+complete -c live -n "__fish_seen_subcommand_from tail" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from tail" -l strip-ansi -d 'Strip ANSI.'
+complete -c live -n "__fish_seen_subcommand_from tail" -l raw -d 'Keep ANSI.'
+complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last N lines (default 10); +N for lines n >= N.'
+complete -c live -n "__fish_seen_subcommand_from tail" -s c -l bytes -r -d 'Last K bytes; +K for bytes after offset K.'
+complete -c live -n "__fish_seen_subcommand_from tail" -s t -l time -r -d 'Lines with idx t > T (epoch).'
 
 # rm
-complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'Kill running recorders'
-complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Resolve selectors globally'
-complete -c live -n "__fish_seen_subcommand_from rm" -l all -d 'Match every session in scope'
-complete -c live -n "__fish_seen_subcommand_from rm" -l exited -d 'Keep only exited sessions'
-complete -c live -n "__fish_seen_subcommand_from rm" -l untitled -d 'Keep only unnamed sessions'
-complete -c live -n "__fish_seen_subcommand_from rm" -l older-than -r -d 'Keep only sessions older than AGE'
+complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'SIGTERM live runs; ignore missing.'
+complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from rm" -l all -d 'Delete all sessions in scope.'
+complete -c live -n "__fish_seen_subcommand_from rm" -l exited -d 'Delete exited sessions.'
+complete -c live -n "__fish_seen_subcommand_from rm" -l untitled -d 'Delete unnamed sessions.'
+complete -c live -n "__fish_seen_subcommand_from rm" -l older-than -r -d 'Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.'
 
 # run -- hand off after first non-flag token.
-complete -c live -n "__fish_seen_subcommand_from run" -s n -l name -r -d 'Session name'
+complete -c live -n "__fish_seen_subcommand_from run" -s n -l name -r -d 'Session name.'
 complete -c live -n "__fish_seen_subcommand_from run; and __fish_complete_subcommand --skip 2" \
     -a "(__fish_complete_subcommand --skip 2)"
 

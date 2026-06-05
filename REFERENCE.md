@@ -6,6 +6,7 @@
 - [`live cat`](#live-cat)
 - [`live head`](#live-head)
 - [`live tail`](#live-tail)
+- [`live less`](#live-less)
 - [`live rm`](#live-rm)
 - [`live completion`](#live-completion)
 - [`live update-shell`](#live-updateshell)
@@ -25,6 +26,7 @@ positional arguments:
     cat           Concatenate session.
     head          Head session.
     tail          Tail session.
+    less          Page session.
     rm            Delete sessions.
     completion    Print shell completion script.
     update-shell  Install completion for the current shell.
@@ -126,6 +128,23 @@ options:
   -n, --lines LINES  Last N lines (default 10); +N for lines n >= N.
   -c, --bytes BYTES  Last K bytes; +K for bytes after offset K.
   -t, --time TIME    Lines with idx t > T (epoch).
+```
+
+## `live less`
+
+```
+usage: live less [-h] [-g] [--strip-ansi | --raw] selector
+
+Page session in an interactive viewer.
+
+positional arguments:
+  selector      NAME or UUID-prefix.
+
+options:
+  -h, --help    show this help message and exit
+  -g, --global  Global scope.
+  --strip-ansi  Strip ANSI.
+  --raw         Keep ANSI.
 ```
 
 ## `live rm`

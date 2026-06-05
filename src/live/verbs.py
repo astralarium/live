@@ -321,6 +321,21 @@ def cmd_tail(args) -> int:
     return 0
 
 
+def cmd_less(args) -> int:
+    res = _get_session_or_fail(args.selector, _scope_filter(args))
+    if res is None:
+        return 2
+    info, cfg = res
+    strip = should_strip_ansi(
+        explicit_strip=args.strip_ansi,
+        explicit_raw=args.raw,
+        stdout_is_tty=sys.stdout.isatty(),
+    )
+    from .pager import run_pager
+
+    return run_pager(info, cfg, strip=strip)
+
+
 def cmd_rm(args) -> int:
     filter_exited = args.exited or args.untitled
     match_all = args.all_ or (filter_exited and not args.selectors)
