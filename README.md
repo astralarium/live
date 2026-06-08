@@ -5,8 +5,8 @@ Live stream command line output.
 Enable agents to inspect logs via familiar interfaces like `cat` and `tail`.
 Explore logs from long-running or long-dead processes.
 
-Large logs auto-rotate. Old sessions are cleaned opportunistically after a week.
-File based persistence stored in `~/.live`. There are no long running daemons.
+Large logs auto-rotate. Old sessions are cleaned opportunistically.
+No long running daemons. All state is stored in `~/.live`.
 
 Requires Python 3.10+. Zero dependencies.
 
@@ -32,30 +32,49 @@ live llms.txt
 
 ## Usage
 
-Record any command:
+Record command:
 
 ```bash
 live run -n server npm start
 ```
 
-Page logs from another process:
+Inspect sessions:
 
 ```bash
-live less server
+live ls              # active sessions
+live ls -ag          # all sessions
+live less server     # interactive paging
+live tail -f server  # follow logs
 ```
 
-Resumable streaming for agents (`-v`) using POSIX semantics:
+Select by name (newest match) or UUID prefix.
+Commands are scoped to sessions in the current directory (and descendants); pass `-g` for global scope.
+
+Clean up:
+
+```bash
+live rm server
+live rm --exited --older-than 1d
+```
+
+## Agents
+
+Resumable streaming for agents using POSIX semantics:
 
 ```bash
 live cat -v server
-live tail -vN +0 server
 ```
 
-Manage session recordings:
+Verbose output (`-v`) returns stream metadata on stderr.
+
+```
+live: id=925f… at-line=41 at-time=1800… at-byte=500
+```
+
+Continue reading from next line:
 
 ```bash
-live ls
-live rm server
+live tail -vN +42 server
 ```
 
 ## Config
