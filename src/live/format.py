@@ -1,7 +1,9 @@
 """On-disk format helpers: meta.json, idx records, segment enumeration.
 
-Index format: append-only binary, 16-byte records: `struct.pack(">Qd", n, t)`
-— uint64 BE line number, float64 BE timestamp (seconds since epoch).
+Index format: 8-byte header (`>Q` lifetime byte offset of segment start), then
+append-only 24-byte records (`>Qdq` line number / timestamp / lifetime byte
+offset of line's first byte). All integers big-endian; timestamps are seconds
+since epoch.
 """
 
 from __future__ import annotations
@@ -20,7 +22,9 @@ LOCK_NAME = "process.lock"
 DEAD_NAME = "deadAt"
 INCONSISTENT_MARKER = b"inconsistent\n"
 
-IDX_RECORD = struct.Struct(">Qd")
+IDX_HEADER = struct.Struct(">Q")
+IDX_HEADER_SIZE = IDX_HEADER.size
+IDX_RECORD = struct.Struct(">Qdq")
 IDX_RECORD_SIZE = IDX_RECORD.size
 
 _STREAM_RE = re.compile(r"^stream\.(\d+)\.log$")
@@ -100,6 +104,30 @@ def read_meta(session_dir: Path) -> Meta | None:
         return None
 
 
+def read_segment_start(idx_path: Path) -> int | None:
+    """Lifetime start byte from the idx header. None if the file is missing or
+    shorter than the header."""
+    try:
+        with idx_path.open("rb") as f:
+            buf = f.read(IDX_HEADER_SIZE)
+            if len(buf) < IDX_HEADER_SIZE:
+                return None
+            return IDX_HEADER.unpack(buf)[0]
+    except FileNotFoundError:
+        return None
+
+
+def segment_tip_byte(idx_path: Path, stream_path: Path) -> int:
+    """Lifetime byte offset just past a segment's current contents (header
+    start + on-disk stream size). Partial-line bytes included; 0 if missing."""
+    start = read_segment_start(idx_path) or 0
+    try:
+        size = os.path.getsize(stream_path)
+    except FileNotFoundError:
+        size = 0
+    return start + size
+
+
 def list_segments(session_dir: Path) -> list[int]:
     """Stream segment numbers from `stream.*.log`, sorted ascending."""
     try:
@@ -131,15 +159,20 @@ def count_complete_lines(stream_path: Path) -> int:
 
 def idx_record_count(idx_path: Path) -> int:
     try:
-        return os.path.getsize(idx_path) // IDX_RECORD_SIZE
+        size = os.path.getsize(idx_path)
     except FileNotFoundError:
         return 0
+    if size < IDX_HEADER_SIZE:
+        return 0
+    return (size - IDX_HEADER_SIZE) // IDX_RECORD_SIZE
 
 
-def first_idx_record(idx_path: Path) -> tuple[int, int] | None:
-    """Return the (n, t) of the first record in an idx file, or None if empty."""
+def first_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
+    """Return the first record as (line, timestamp, byte offset). None if no
+    records exist yet (header-only or missing file)."""
     try:
         with idx_path.open("rb") as f:
+            f.seek(IDX_HEADER_SIZE)
             buf = f.read(IDX_RECORD_SIZE)
             if len(buf) < IDX_RECORD_SIZE:
                 return None
@@ -148,11 +181,12 @@ def first_idx_record(idx_path: Path) -> tuple[int, int] | None:
         return None
 
 
-def last_idx_record(idx_path: Path) -> tuple[int, int] | None:
-    """Return the (n, t) of the trailing record in an idx file, or None if empty."""
+def last_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
+    """Return the trailing record as (line, timestamp, byte offset). None if no
+    records exist yet (header-only or missing file)."""
     try:
         size = os.path.getsize(idx_path)
-        if size < IDX_RECORD_SIZE:
+        if size < IDX_HEADER_SIZE + IDX_RECORD_SIZE:
             return None
         with idx_path.open("rb") as f:
             f.seek(size - IDX_RECORD_SIZE)
@@ -168,13 +202,17 @@ class Watermarks:
     last_segment: int
     first_line: int  # 0 if no records
     last_line: int  # 0 if no records
+    first_byte: int  # 0 if no segments
+    last_byte: int  # 0 if no segments
     count: int  # last - first + 1, or 0
 
 
 def compute_watermarks(session_dir: Path) -> Watermarks:
     segs = list_segments(session_dir)
     if not segs:
-        return Watermarks(0, 0, 0, 0, 0)
+        return Watermarks(0, 0, 0, 0, 0, 0, 0)
+
+    first_byte = read_segment_start(session_dir / idx_name(segs[0])) or 0
 
     first_n = 0
     for seg in segs:
@@ -190,17 +228,26 @@ def compute_watermarks(session_dir: Path) -> Watermarks:
             last_n = rec[0]
             break
 
+    last_byte = segment_tip_byte(
+        session_dir / idx_name(segs[-1]),
+        session_dir / stream_name(segs[-1]),
+    )
+
     count = last_n - first_n + 1 if last_n else 0
-    return Watermarks(segs[0], segs[-1], first_n, last_n, count)
+    return Watermarks(segs[0], segs[-1], first_n, last_n, first_byte, last_byte, count)
 
 
-def read_idx_records(idx_path: Path) -> list[tuple[int, int]]:
-    """Read all (n, t) records from an idx file."""
+def read_idx_records(idx_path: Path) -> list[tuple[int, float, int]]:
+    """Read all (n, t, byte_offset) records from an idx file (header skipped)."""
     try:
         data = idx_path.read_bytes()
     except FileNotFoundError:
         return []
-    out: list[tuple[int, int]] = []
-    for i in range(0, len(data) - IDX_RECORD_SIZE + 1, IDX_RECORD_SIZE):
+    if len(data) < IDX_HEADER_SIZE:
+        return []
+    out: list[tuple[int, float, int]] = []
+    for i in range(
+        IDX_HEADER_SIZE, len(data) - IDX_RECORD_SIZE + 1, IDX_RECORD_SIZE
+    ):
         out.append(IDX_RECORD.unpack_from(data, i))
     return out

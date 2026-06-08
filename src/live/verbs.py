@@ -80,7 +80,7 @@ def _emit_read_result(
         emit_hung(info.last_activity)
     else:
         emit_exit(info)
-    emit_trailer(info.id, result.last_line, result.at_time, result.at_byte)
+    emit_trailer(info.id, result.last_line + 1, result.next_byte, result.last_time)
 
 
 # ----- verbs -----
@@ -134,6 +134,8 @@ def cmd_ls(args) -> int:
                 "lastSegment": s.watermarks.last_segment,
                 "firstLine": s.watermarks.first_line,
                 "lastLine": s.watermarks.last_line,
+                "firstByte": s.watermarks.first_byte,
+                "lastByte": s.watermarks.last_byte,
                 "count": s.watermarks.count,
                 "lastActivity": s.last_activity,
             }
@@ -266,24 +268,24 @@ def cmd_tail(args) -> int:
 
     verbose = args.verbose
     if is_line_cursor:
-        result = lines_since(info.path, since=n_val)
-        # Caught-up polls (n_val == last_line + 1) are silent. Warn only when
-        # the cursor is multiple lines past the session's lastLine.
+        result = lines_since(info.path, from_line=n_val)
+        # Caught-up polls (n_val == next-line) are silent. Warn only when the
+        # cursor is past the session's tip.
         if n_val > result.last_line + 1 and result.last_line:
             result.stderr_lines.append(
-                f"since={n_val} > at-line={result.last_line}; check id"
+                f"from-line={n_val} > next-line={result.last_line + 1}; check id"
             )
     elif is_byte_cursor:
-        result = bytes_since(info.path, since=c_val)
-        if c_val > result.at_byte and result.at_byte:
+        result = bytes_since(info.path, from_byte=c_val)
+        if c_val > result.next_byte and result.next_byte:
             result.stderr_lines.append(
-                f"bytes={c_val} > at-byte={result.at_byte}; check id"
+                f"from-byte={c_val} > next-byte={result.next_byte}; check id"
             )
     elif is_time_cursor:
-        result = lines_since_time(info.path, since_t=args.time)
-        if args.time > result.at_time and result.at_time:
+        result = lines_since_time(info.path, from_time=args.time)
+        if args.time > result.last_time and result.last_time:
             result.stderr_lines.append(
-                f"time={args.time:.3f} > at-time={result.at_time:.3f}; check id"
+                f"from-time={args.time:.3f} > last-time={result.last_time:.3f}; check id"
             )
     else:
         result = tail_last(
@@ -437,20 +439,21 @@ Read output:
   live cat -v <SELECTOR>
   live head -v <SELECTOR>
 
-- stdout: command stdout+stderr (merged)
+stdout: merged stdout+stderr logs
 
-- stderr: live verbose output (-v):
-  - trailer: "live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>"
-  - stop: "live: exit-code=" or "live: exit=inconsistent"
-  - hung: "live: status=hung last-activity=<s>" (alive, but stalled)
-  - gap: "live: dropped <k> lines (since=<N>, first retained=<F>)"
-  - partial: "live: partial-line bytes=<k> age=<s>"
+stderr: `live` verbose output (-v):
+- trailer: "live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>"
+- stop: "live: exit-code=" or "live: exit=inconsistent"
+- hung: "live: status=hung last-activity=<s>" (alive, but stalled)
+- gap (lines): "live: dropped <k> lines (from-line=<N>, first-line=<F>)"
+- gap (bytes): "live: dropped <k> bytes (from-byte=<B>, first-byte=<F>)"
+- partial: "live: partial-line bytes=<k> age=<s>"
 
 Check for new data:
-live tail -vn +<N> <SELECTOR>
+  live tail -vn +<N> <SELECTOR>  # by line
+  live tail -vc +<B> <SELECTOR>  # by byte
 
-- set +<N> = <L>+1 from last read
-- reset <N>=0 if <uuid> changes (new session)
+Reset cursor to 0 if <uuid> changes (new session)
 """
 
 

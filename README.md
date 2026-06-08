@@ -68,7 +68,7 @@ live cat -v server
 Verbose output (`-v`) returns stream metadata on stderr.
 
 ```
-live: id=925f… at-line=41 at-time=1800… at-byte=500
+live: id=925f… next-line=42 next-byte=250 last-time=1800…
 ```
 
 Continue reading from next line:

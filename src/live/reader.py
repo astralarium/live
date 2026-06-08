@@ -14,6 +14,8 @@ from .format import (
     last_idx_record,
     list_segments,
     read_idx_records,
+    read_segment_start,
+    segment_tip_byte,
     stream_name,
 )
 
@@ -80,7 +82,9 @@ def stream_segment_bytes(stream_path: Path) -> bytes:
         return b""
 
 
-def lines_in_segment(stream: bytes, idx_records: list[tuple[int, int]]) -> list[bytes]:
+def lines_in_segment(
+    stream: bytes, idx_records: list[tuple[int, float, int]]
+) -> list[bytes]:
     """Split the stream bytes into N complete lines matching idx_records.
 
     Each line includes its trailing `\\n`. Any partial tail (no `\\n`) is dropped.
@@ -99,7 +103,9 @@ def lines_in_segment(stream: bytes, idx_records: list[tuple[int, int]]) -> list[
     return lines
 
 
-def partial_tail_bytes(stream: bytes, idx_records: list[tuple[int, int]]) -> bytes:
+def partial_tail_bytes(
+    stream: bytes, idx_records: list[tuple[int, float, int]]
+) -> bytes:
     """Return any bytes after the last `\\n` that idx_records covers."""
     line_count = len(idx_records)
     pos = 0
@@ -118,18 +124,22 @@ class ReadResult:
     stdout: bytes
     # Stderr lines (without trailing newlines), in canonical order.
     stderr_lines: list[str]
-    first_line: int  # first n actually emitted (0 if none)
-    last_line: int  # trailer cursor — agents resume with `tail -n +<L+1>`
-    at_time: float  # wall-clock time of last write (active stream mtime); 0.0 if no segment
-    at_byte: int  # cumulative byte cursor (where -c +B would resume)
+    first_emitted: int  # first n actually emitted (0 if none)
+    last_line: (
+        int  # highest emitted line number (0 if none); next-line cursor = last_line + 1
+    )
+    last_time: (
+        float  # wall-clock time of last write (active stream mtime); 0.0 if no segment
+    )
+    next_byte: int  # lifetime byte cursor — agents resume with `tail -c +<next_byte>`
     dropped: int  # k lines dropped (gap)
-    first_retained: int  # firstLine of session at read time
+    first_line: int  # retention floor: first n still on disk (0 if no records)
     partial_bytes: int  # k bytes in partial-line tail
     partial_age: float  # age of partial line in seconds (0.0 if none)
     partial_seg: int | None  # segment number carrying the partial (None if no partial)
 
 
-def at_time_of(session_dir: Path) -> float:
+def last_time_of(session_dir: Path) -> float:
     """Wall-clock time of the most recent byte written to the active stream.
     Returns 0.0 if no segment exists. Heartbeats only touch the idx, so this
     reflects real byte writes — partial-line bytes included."""
@@ -159,27 +169,35 @@ def _first_and_last_line(refs: list[SegmentRef]) -> tuple[int, int]:
     return first_line, last_line
 
 
-def at_byte_of(session_dir: Path) -> int:
-    """Cumulative byte count across all stream segments (partial bytes included).
-    Returns 0 if no segments exist. This is the cursor where `tail -c +K` would
-    resume."""
-    refs = segment_refs(session_dir)
-    total = 0
-    for ref in refs:
-        try:
-            total += os.path.getsize(ref.stream_path)
-        except FileNotFoundError:
-            pass
-    return total
+def first_byte_of(session_dir: Path) -> int:
+    """Lifetime byte offset of the first currently-retained byte. Read from the
+    idx header of the first retained segment; 0 if no segments or header."""
+    segs = list_segments(session_dir)
+    if not segs:
+        return 0
+    start = read_segment_start(session_dir / idx_name(segs[0]))
+    return start if start is not None else 0
+
+
+def next_byte_of(session_dir: Path) -> int:
+    """Lifetime byte cursor at the session tip (partial-line bytes included).
+    `tail -c +K` resumes from lifetime offset K."""
+    segs = list_segments(session_dir)
+    if not segs:
+        return 0
+    return segment_tip_byte(
+        session_dir / idx_name(segs[-1]),
+        session_dir / stream_name(segs[-1]),
+    )
 
 
 def lines_since(
     session_dir: Path,
     *,
-    since: int,
+    from_line: int,
 ) -> ReadResult:
-    """Read lines with n >= since (Unix `tail -n +N` semantics). Includes any
-    partial-line tail in stdout."""
+    """Read lines with n >= from_line (Unix `tail -n +N` semantics). Includes
+    any partial-line tail in stdout."""
     refs = segment_refs(session_dir)
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
@@ -188,16 +206,16 @@ def lines_since(
 
     stderr_lines: list[str] = []
     dropped = 0
-    # Line numbers are 1-indexed; treat since<1 as "from the start" with no gap.
-    effective_since = max(since, 1)
-    if first_line and effective_since < first_line:
-        dropped = first_line - effective_since
+    # Line numbers are 1-indexed; treat from_line<1 as "from the start" with no gap.
+    effective_from = max(from_line, 1)
+    if first_line and effective_from < first_line:
+        dropped = first_line - effective_from
         stderr_lines.append(
-            f"dropped {dropped} lines (since={since}, first retained={first_line})"
+            f"dropped {dropped} lines (from-line={from_line}, first-line={first_line})"
         )
         emit_from = first_line
     else:
-        emit_from = max(effective_since, first_line) if first_line else 0
+        emit_from = max(effective_from, first_line) if first_line else 0
 
     out = bytearray()
     if first_line and emit_from <= last_line:
@@ -207,7 +225,7 @@ def lines_since(
                 continue
             stream = stream_segment_bytes(ref.stream_path)
             lines = lines_in_segment(stream, records)
-            for rec_idx, (n, _t) in enumerate(records):
+            for rec_idx, (n, _t, _b) in enumerate(records):
                 if n < emit_from:
                     continue
                 if rec_idx >= len(lines):
@@ -217,31 +235,32 @@ def lines_since(
     partial_bytes = 0
     partial_age = 0.0
     partial_seg: int | None = None
-    at_time = 0.0
+    last_time = 0.0
     if refs:
         last_ref = refs[-1]
         try:
-            at_time = os.path.getmtime(last_ref.stream_path)
+            last_time = os.path.getmtime(last_ref.stream_path)
         except FileNotFoundError:
-            at_time = 0.0
+            last_time = 0.0
         records = read_idx_records(last_ref.idx_path)
         stream = stream_segment_bytes(last_ref.stream_path)
         tail = partial_tail_bytes(stream, records)
         if tail:
-            partial_bytes = len(tail)
-            partial_seg = last_ref.seg
-            partial_age = max(0.0, time.time() - at_time)
             out.extend(tail)
+            if last_time > 0.0:
+                partial_bytes = len(tail)
+                partial_seg = last_ref.seg
+                partial_age = max(0.0, time.time() - last_time)
 
     return ReadResult(
         stdout=bytes(out),
         stderr_lines=stderr_lines,
-        first_line=emit_from,
+        first_emitted=emit_from,
         last_line=last_line,
-        at_time=at_time,
-        at_byte=at_byte_of(session_dir),
+        last_time=last_time,
+        next_byte=next_byte_of(session_dir),
         dropped=dropped,
-        first_retained=first_line,
+        first_line=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         partial_seg=partial_seg,
@@ -250,11 +269,11 @@ def lines_since(
 
 def cat_all(session_dir: Path) -> ReadResult:
     """Concatenate every stream segment + partial tail."""
-    return lines_since(session_dir, since=0)
+    return lines_since(session_dir, from_line=0)
 
 
-def lines_since_time(session_dir: Path, *, since_t: float) -> ReadResult:
-    """Read lines whose idx timestamp `t > since_t`. Includes partial-line tail."""
+def lines_since_time(session_dir: Path, *, from_time: float) -> ReadResult:
+    """Read lines whose idx timestamp `t > from_time`. Includes partial-line tail."""
     refs = segment_refs(session_dir)
     if not refs:
         return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
@@ -264,42 +283,42 @@ def lines_since_time(session_dir: Path, *, since_t: float) -> ReadResult:
     out = bytearray()
     for ref in refs:
         records = read_idx_records(ref.idx_path)
-        if not records or records[-1][1] <= since_t:
+        if not records or records[-1][1] <= from_time:
             continue
         stream = stream_segment_bytes(ref.stream_path)
         lines = lines_in_segment(stream, records)
-        for rec_idx, (_n, t) in enumerate(records):
-            if t <= since_t or rec_idx >= len(lines):
+        for rec_idx, (_n, t, _b) in enumerate(records):
+            if t <= from_time or rec_idx >= len(lines):
                 continue
             out.extend(lines[rec_idx])
 
     partial_bytes = 0
     partial_age = 0.0
     partial_seg: int | None = None
-    at_time = 0.0
+    last_time = 0.0
     last_ref = refs[-1]
     try:
-        at_time = os.path.getmtime(last_ref.stream_path)
+        last_time = os.path.getmtime(last_ref.stream_path)
     except FileNotFoundError:
-        at_time = 0.0
+        last_time = 0.0
     records = read_idx_records(last_ref.idx_path)
     stream = stream_segment_bytes(last_ref.stream_path)
     tail = partial_tail_bytes(stream, records)
-    if tail and at_time > since_t:
+    if tail and last_time > from_time:
         partial_bytes = len(tail)
         partial_seg = last_ref.seg
-        partial_age = max(0.0, time.time() - at_time)
+        partial_age = max(0.0, time.time() - last_time)
         out.extend(tail)
 
     return ReadResult(
         stdout=bytes(out),
         stderr_lines=[],
-        first_line=0,
+        first_emitted=0,
         last_line=last_line,
-        at_time=at_time,
-        at_byte=at_byte_of(session_dir),
+        last_time=last_time,
+        next_byte=next_byte_of(session_dir),
         dropped=0,
-        first_retained=first_line,
+        first_line=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         partial_seg=partial_seg,
@@ -319,7 +338,7 @@ def head_first(
     if result.partial_bytes:
         body = body[: -result.partial_bytes]
 
-    first_n = result.first_retained or 0
+    first_n = result.first_line or 0
 
     if c_bytes is not None:
         body = body[:c_bytes] if c_bytes < len(body) else body
@@ -340,56 +359,91 @@ def head_first(
 
     emitted = body.count(b"\n")
     last_line = (first_n + emitted - 1) if (first_n and emitted) else 0
+    # cat_all spans [first_byte, first_byte + len(result.stdout)); take len(body)
+    # from the head, so next_byte = first_byte + len(body).
+    first_byte = result.next_byte - len(result.stdout)
     return ReadResult(
         stdout=body,
         stderr_lines=result.stderr_lines,
-        first_line=first_n if emitted else 0,
+        first_emitted=first_n if emitted else 0,
         last_line=last_line,
-        at_time=result.at_time,
-        at_byte=len(body),
+        last_time=result.last_time,
+        next_byte=first_byte + len(body),
         dropped=result.dropped,
-        first_retained=first_n,
+        first_line=first_n,
         partial_bytes=0,
         partial_age=0.0,
         partial_seg=None,
     )
 
 
-def bytes_since(session_dir: Path, *, since: int) -> ReadResult:
-    """Read bytes after virtual offset `since` (tail -c +K). May start mid-line.
-    Partial-line bytes are included since they live in the active stream file."""
+def bytes_since(session_dir: Path, *, from_byte: int) -> ReadResult:
+    """Read bytes after lifetime offset `from_byte` (tail -c +K). May start
+    mid-line; partial-line bytes are included.
+
+    If `from_byte` points below the retention floor (retention dropped that
+    range), emits a `dropped <K> bytes (from-byte=<B>, first-byte=<F>)` extra
+    and starts at the floor.
+    """
     refs = segment_refs(session_dir)
+    first_byte = first_byte_of(session_dir)
     if not refs:
-        return ReadResult(b"", [], 0, 0, 0.0, 0, 0, 0, 0, 0.0, None)
+        return ReadResult(b"", [], 0, 0, 0.0, first_byte, 0, 0, 0, 0.0, None)
 
     first_line, last_line = _first_and_last_line(refs)
 
+    stderr_lines: list[str] = []
+    dropped = 0
+    if from_byte < first_byte:
+        dropped = first_byte - from_byte
+        stderr_lines.append(
+            f"dropped {dropped} bytes (from-byte={from_byte}, first-byte={first_byte})"
+        )
+        effective_from = first_byte
+    else:
+        effective_from = from_byte
+
     out = bytearray()
-    cumulative = 0
+    cumulative = first_byte  # lifetime offset of next segment's start
     for ref in refs:
         try:
             size = os.path.getsize(ref.stream_path)
         except FileNotFoundError:
             size = 0
-        if cumulative + size > since:
-            offset = max(0, since - cumulative)
+        if cumulative + size > effective_from:
+            offset = max(0, effective_from - cumulative)
             out.extend(stream_segment_bytes(ref.stream_path)[offset:])
         cumulative += size
 
-    at_time = at_time_of(session_dir)
+    partial_bytes = 0
+    partial_age = 0.0
+    partial_seg: int | None = None
+    last_time = 0.0
+    last_ref = refs[-1]
+    try:
+        last_time = os.path.getmtime(last_ref.stream_path)
+    except FileNotFoundError:
+        last_time = 0.0
+    records = read_idx_records(last_ref.idx_path)
+    stream = stream_segment_bytes(last_ref.stream_path)
+    tail = partial_tail_bytes(stream, records)
+    if tail and last_time > 0.0:
+        partial_bytes = len(tail)
+        partial_seg = last_ref.seg
+        partial_age = max(0.0, time.time() - last_time)
 
     return ReadResult(
         stdout=bytes(out),
-        stderr_lines=[],
-        first_line=0,
+        stderr_lines=stderr_lines,
+        first_emitted=0,
         last_line=last_line,
-        at_time=at_time,
-        at_byte=cumulative,
-        dropped=0,
-        first_retained=first_line,
-        partial_bytes=0,
-        partial_age=0.0,
-        partial_seg=None,
+        last_time=last_time,
+        next_byte=cumulative,
+        dropped=dropped,
+        first_line=first_line,
+        partial_bytes=partial_bytes,
+        partial_age=partial_age,
+        partial_seg=partial_seg,
     )
 
 
@@ -403,7 +457,7 @@ def head_drop_last(
     if result.partial_bytes:
         body = body[: -result.partial_bytes]
 
-    first_n = result.first_retained or 0
+    first_n = result.first_line or 0
 
     if c_bytes is not None:
         if c_bytes >= len(body):
@@ -426,15 +480,16 @@ def head_drop_last(
 
     emitted = body.count(b"\n")
     last_line = (first_n + emitted - 1) if (first_n and emitted) else 0
+    first_byte = result.next_byte - len(result.stdout)
     return ReadResult(
         stdout=body,
         stderr_lines=result.stderr_lines,
-        first_line=first_n if emitted else 0,
+        first_emitted=first_n if emitted else 0,
         last_line=last_line,
-        at_time=result.at_time,
-        at_byte=len(body),
+        last_time=result.last_time,
+        next_byte=first_byte + len(body),
         dropped=result.dropped,
-        first_retained=first_n,
+        first_line=first_n,
         partial_bytes=0,
         partial_age=0.0,
         partial_seg=None,
@@ -452,6 +507,7 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
 
     out = bytearray()
     last_n = 0
+    last_byte_end: int | None = None
     done = False
     for ref in refs:
         if done:
@@ -463,22 +519,27 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
             break
         stream = stream_segment_bytes(ref.stream_path)
         lines = lines_in_segment(stream, records)
-        for rec_idx, (n, t) in enumerate(records):
+        for rec_idx, (n, t, b) in enumerate(records):
             if rec_idx >= len(lines) or t > until_t:
                 done = True
                 break
-            out.extend(lines[rec_idx])
+            line = lines[rec_idx]
+            out.extend(line)
             last_n = n
+            last_byte_end = b + len(line)
 
+    next_byte = (
+        last_byte_end if last_byte_end is not None else first_byte_of(session_dir)
+    )
     return ReadResult(
         stdout=bytes(out),
         stderr_lines=[],
-        first_line=first_line if (first_line and out) else 0,
+        first_emitted=first_line if (first_line and out) else 0,
         last_line=last_n,
-        at_time=at_time_of(session_dir),
-        at_byte=len(out),
+        last_time=last_time_of(session_dir),
+        next_byte=next_byte,
         dropped=0,
-        first_retained=first_line,
+        first_line=first_line,
         partial_bytes=0,
         partial_age=0.0,
         partial_seg=None,
@@ -519,12 +580,12 @@ def tail_last(
     return ReadResult(
         stdout=new_stdout,
         stderr_lines=result.stderr_lines,
-        first_line=result.first_line,
+        first_emitted=result.first_emitted,
         last_line=result.last_line,
         dropped=result.dropped,
-        first_retained=result.first_retained,
-        at_time=result.at_time,
-        at_byte=result.at_byte,
+        first_line=result.first_line,
+        last_time=result.last_time,
+        next_byte=result.next_byte,
         partial_bytes=result.partial_bytes,
         partial_age=result.partial_age,
         partial_seg=result.partial_seg,

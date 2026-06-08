@@ -7,15 +7,18 @@ from pathlib import Path
 
 # Tokens agents key off of when parsing `live tail -v` output.
 TRAILER_TOKENS = (
-    "at-line=",
-    "at-time=",
-    "at-byte=",
+    "next-line=",
+    "next-byte=",
+    "last-time=",
+    "from-line=",
+    "from-byte=",
     "exit-code=",
     "exit=inconsistent",
     "status=hung",
     "last-activity=",
     "dropped",
-    "first retained=",
+    "first-line=",
+    "first-byte=",
     "partial-line",
 )
 
@@ -30,4 +33,5 @@ def test_llms_txt_prints_agent_guide_schema(project: Path, run_live) -> None:
     # Spot-check the resume protocol so a careless rewording can't drop it.
     assert "live tail" in body
     assert "+<N>" in body
+    assert "+<B>" in body
     assert "SELECTOR" in body

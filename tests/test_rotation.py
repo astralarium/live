@@ -78,7 +78,7 @@ def test_since_after_retention_reports_gap(project: Path, run_live) -> None:
     )
     poll = run_live(project, "tail", "-vn", "+0", "spam")
     assert "dropped" in poll.stderr
-    assert "first retained=" in poll.stderr
+    assert "first-line=" in poll.stderr
 
 
 def test_cat_without_retention_emits_no_gap_warning(project: Path, run_live) -> None:

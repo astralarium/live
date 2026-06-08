@@ -41,8 +41,13 @@ def emit_exit(info: SessionInfo | None) -> None:
         _emit(f"exit-code={info.exit_code}")
 
 
-def emit_trailer(session_id: str, last_line: int, at_time: float, at_byte: int) -> None:
+def emit_trailer(
+    session_id: str, next_line: int, next_byte: int, last_time: float
+) -> None:
+    """`next-line`/`next-byte` are resume cursors: plug straight into `tail -n
+    +<next-line>` or `tail -c +<next-byte>` to read what's been written since.
+    `last-time` is the timestamp of the most recent write."""
     _emit(
-        f"id={session_id} at-line={last_line}"
-        f" at-time={at_time:.3f} at-byte={at_byte}"
+        f"id={session_id} next-line={next_line}"
+        f" next-byte={next_byte} last-time={last_time:.3f}"
     )

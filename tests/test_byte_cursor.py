@@ -1,20 +1,23 @@
-"""`live tail -c +K` resumable byte cursor (consumes `at-byte` from trailer)."""
+"""`live tail -c +K` resumable byte cursor (consumes `next-byte` from trailer)."""
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
 def test_tail_c_plus_emits_bytes_after_cursor(project: Path, run_live) -> None:
-    """Probe at-byte, then `tail -c +K` should emit only bytes after position K."""
+    """Probe next-byte, then `tail -c +K` should emit only bytes after position K."""
     run_live(
         project, "run", "-n", "bc", "--", "sh", "-c",
         "echo aaa; echo bbb; echo ccc",
     )
-    # Get full read + trailer at-byte.
+    # Get full read + trailer next-byte.
     full = run_live(project, "tail", "-vn", "+0", "bc")
-    m = re.search(r"at-byte=(\d+)", full.stderr)
+    m = re.search(r"next-byte=(\d+)", full.stderr)
     assert m, full.stderr
     total = int(m.group(1))
 
@@ -30,7 +33,7 @@ def test_tail_c_plus_emits_bytes_after_cursor(project: Path, run_live) -> None:
 def test_tail_c_plus_cursor_at_end_is_empty(project: Path, run_live) -> None:
     run_live(project, "run", "-n", "bc2", "--", "sh", "-c", "echo a")
     full = run_live(project, "tail", "-vn", "+0", "bc2")
-    m = re.search(r"at-byte=(\d+)", full.stderr)
+    m = re.search(r"next-byte=(\d+)", full.stderr)
     total = int(m.group(1))
 
     out = run_live(project, "tail", "-c", f"+{total}", "bc2")
@@ -40,13 +43,13 @@ def test_tail_c_plus_cursor_at_end_is_empty(project: Path, run_live) -> None:
 def test_tail_c_plus_cursor_ahead_warns(project: Path, run_live) -> None:
     run_live(project, "run", "-n", "bc3", "--", "sh", "-c", "echo a")
     full = run_live(project, "tail", "-vn", "+0", "bc3")
-    m = re.search(r"at-byte=(\d+)", full.stderr)
+    m = re.search(r"next-byte=(\d+)", full.stderr)
     total = int(m.group(1))
 
     out = run_live(project, "tail", "-v", "-c", f"+{total + 1000}", "bc3")
     assert out.stdout == ""
-    assert f"bytes={total + 1000}" in out.stderr
-    assert f"> at-byte={total}" in out.stderr
+    assert f"from-byte={total + 1000}" in out.stderr
+    assert f"> next-byte={total}" in out.stderr
     assert "check id" in out.stderr
 
 
@@ -75,3 +78,129 @@ def test_tail_c_larger_than_stream_emits_all(project: Path, run_live) -> None:
     full = run_live(project, "cat", "bc6", text=False).stdout
     out = run_live(project, "tail", "-c", "9999", "bc6", text=False).stdout
     assert out == full
+
+
+def test_ls_json_exposes_first_byte_last_byte(project: Path, run_live) -> None:
+    """`ls --json` carries firstByte/lastByte alongside firstLine/lastLine."""
+    run_live(project, "run", "-n", "fb", "--", "echo", "hi")
+    out = run_live(project, "ls", "-a", "--json")
+    info = json.loads(out.stdout.splitlines()[0])
+    assert info["firstByte"] == 0
+    assert info["lastByte"] > 0
+    assert info["lastByte"] >= info["firstByte"]
+
+
+def test_bytes_since_reports_partial_line(
+    project: Path, live_env, run_live, wait_for, wait_for_session
+) -> None:
+    """Byte-mode (`tail -vc +0`) surfaces the partial-line marker."""
+    script = (
+        "printf 'complete line\\n'; "
+        "printf 'partial prompt > '; "
+        "sleep 10"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "live.cli", "run", "-n", "bc_partial", "--",
+         "sh", "-c", script],
+        cwd=str(project),
+        env=live_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        sess_dir = wait_for_session()
+        stream = sess_dir / "stream.0000.log"
+        idx = sess_dir / "lines.0000.idx"
+
+        def has_partial() -> bool:
+            try:
+                s = stream.read_bytes()
+                i = idx.read_bytes()
+            except FileNotFoundError:
+                return False
+            return len(i) == 32 and b"partial prompt >" in s and not s.endswith(b"\n")
+
+        assert wait_for(has_partial, timeout=8.0), "partial state never appeared"
+
+        out = run_live(project, "tail", "-vc", "+0", "bc_partial")
+        assert "complete line" in out.stdout
+        assert "partial prompt >" in out.stdout
+        assert "live: partial-line bytes=" in out.stderr
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def _configure_rotation(project: Path, *, segment_kb: int, max_kb: int) -> None:
+    (project / ".live").mkdir(mode=0o700, exist_ok=True)
+    (project / ".live" / "config.json").write_text(
+        json.dumps({"segmentKb": segment_kb, "maxKb": max_kb})
+    )
+
+
+def test_first_byte_advances_after_rotation(project: Path, run_live) -> None:
+    """After retention drops segments, `firstByte` in ls --json reflects the
+    lifetime offset where retained data begins, and `lastByte` is the tip."""
+    _configure_rotation(project, segment_kb=1, max_kb=2)
+    run_live(
+        project, "run", "-n", "spam", "--", "sh", "-c",
+        "i=0; while [ $i -lt 250 ]; do "
+        "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
+    )
+    out = run_live(project, "ls", "-a", "--json")
+    info = json.loads(out.stdout.splitlines()[0])
+    assert info["firstByte"] > 0, "expected rotation to advance firstByte"
+    assert info["lastByte"] > info["firstByte"], "lastByte must exceed firstByte"
+
+
+def test_bytes_since_below_floor_warns_and_resumes(project: Path, run_live) -> None:
+    """A byte cursor below the floor emits `dropped K bytes (from-byte=0,
+    first-byte=F)` where K=F and F matches `ls --json` firstByte; stdout
+    resumes at the floor."""
+    _configure_rotation(project, segment_kb=1, max_kb=2)
+    run_live(
+        project, "run", "-n", "drop", "--", "sh", "-c",
+        "i=0; while [ $i -lt 250 ]; do "
+        "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
+    )
+    info = json.loads(
+        run_live(project, "ls", "-a", "--json", "drop").stdout.splitlines()[0]
+    )
+    first_byte = info["firstByte"]
+    last_byte = info["lastByte"]
+    assert first_byte > 0, "rotation must have advanced firstByte for this to be meaningful"
+
+    out = run_live(project, "tail", "-vc", "+0", "drop", text=False)
+    stderr = out.stderr.decode()
+    m = re.search(
+        r"dropped (\d+) bytes \(from-byte=(\d+), first-byte=(\d+)\)", stderr
+    )
+    assert m, f"missing/malformed gap warning: {stderr!r}"
+    dropped, from_byte, reported_floor = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    assert from_byte == 0
+    assert reported_floor == first_byte
+    assert dropped == first_byte  # K bytes dropped == floor offset when starting at 0
+    # Resumes at the floor: stdout byte length equals retained range.
+    assert len(out.stdout) == last_byte - first_byte
+
+
+def test_bytes_since_above_floor_resumes_cleanly(project: Path, run_live) -> None:
+    """When `+K` lands inside retained data after rotation, output starts at
+    that lifetime offset — no `dropped` warning."""
+    _configure_rotation(project, segment_kb=1, max_kb=2)
+    run_live(
+        project, "run", "-n", "resume", "--", "sh", "-c",
+        "i=0; while [ $i -lt 250 ]; do "
+        "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
+    )
+    probe = run_live(project, "ls", "-a", "--json", "resume")
+    info = json.loads(probe.stdout.splitlines()[0])
+    midpoint = (info["firstByte"] + info["lastByte"]) // 2
+
+    out = run_live(project, "tail", "-vc", f"+{midpoint}", "resume")
+    assert "dropped" not in out.stderr
+    assert len(out.stdout) > 0

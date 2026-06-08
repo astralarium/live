@@ -17,8 +17,8 @@ from .format import (
 )
 from .lock import probe_held
 from .reader import (
-    at_byte_of,
-    at_time_of,
+    next_byte_of,
+    last_time_of,
     lines_in_segment,
     partial_tail_bytes,
     stream_segment_bytes,
@@ -155,7 +155,7 @@ def _emit_new_lines(
         stream = stream_segment_bytes(session_dir / stream_name(seg))
         lines = lines_in_segment(stream, records)
 
-        for rec_idx, (n, _t) in enumerate(records):
+        for rec_idx, (n, _t, _b) in enumerate(records):
             if n <= cursor or rec_idx >= len(lines):
                 continue
             line = lines[rec_idx]
@@ -196,4 +196,6 @@ def _emit_exit_trailer(
     session_dir: Path, session_id: str, cursor: int, cfg: Config
 ) -> None:
     emit_exit(session_info(session_dir, cfg))
-    emit_trailer(session_id, cursor, at_time_of(session_dir), at_byte_of(session_dir))
+    emit_trailer(
+        session_id, cursor + 1, next_byte_of(session_dir), last_time_of(session_dir)
+    )

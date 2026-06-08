@@ -37,7 +37,7 @@ def test_sweep_stamps_consistent_when_stream_and_idx_match(tmp_path: Path) -> No
     (sess / LOCK_NAME).write_text("99999\n")  # pid; flock probe will succeed.
     # 3 complete lines, 3 idx records -> consistent.
     (sess / "stream.0000.log").write_bytes(b"a\nb\nc\n")
-    (sess / "lines.0000.idx").write_bytes(b"\x00" * 48)
+    (sess / "lines.0000.idx").write_bytes(b"\x00" * (8 + 3 * 24))
 
     sweep_one(sess, _cfg())
 
@@ -53,7 +53,7 @@ def test_sweep_stamps_inconsistent_when_stream_is_one_line_ahead(tmp_path: Path)
     (sess / LOCK_NAME).write_text("99999\n")
     # 3 complete lines but only 2 idx records -> crash mid-write.
     (sess / "stream.0000.log").write_bytes(b"a\nb\nc\n")
-    (sess / "lines.0000.idx").write_bytes(b"\x00" * 32)
+    (sess / "lines.0000.idx").write_bytes(b"\x00" * (8 + 2 * 24))
 
     sweep_one(sess, _cfg())
 
@@ -143,7 +143,7 @@ def _mk_info(status: str, exit_code: int | None) -> SessionInfo:
         path=Path("/x"),
         meta=Meta(id="x", command=["sh"], cwd="/", started_at=0.0),
         status=status,
-        watermarks=Watermarks(0, 0, 0, 0, 0),
+        watermarks=Watermarks(0, 0, 0, 0, 0, 0, 0),
         last_activity=0.0,
         exited_at=None,
         exit_code=exit_code,

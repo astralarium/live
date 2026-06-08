@@ -39,12 +39,12 @@ A single positional token, resolved like a git ref:
 With `-v`, stderr carries metadata; without it, stderr is silent on success. Errors are always printed. The trailing line of any verbose read is:
 
 ```
-live: id=<uuid> at-line=<L> at-time=<T> at-byte=<B>
+live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>
 ```
 
-Agents using `tail -vn +N` pass `<L>+1` as the next cursor and reset to `0` when `<uuid>` changes. `<T>` (active stream mtime, partial-bytes-aware since heartbeats only touch idx) and `<B>` (cumulative byte cursor) are alternates for `tail -t T` / `tail -c +K`.
+`<N>` and `<B>` are resume cursors — plug straight into `tail -n +N` or `tail -c +B` to read what's been written since. Reset to `0` when `<uuid>` changes. `<T>` (active stream mtime, partial-bytes-aware since heartbeats only touch idx) is the alternate for `tail -t T`. `<B>` is a lifetime byte offset that survives segment rotation.
 
-Possible preceding lines, in order: `dropped <k> lines …` (gap), `since=<N> > at-line=<L>; check id` / `time=<T> > at-time=<T>; check id` / `bytes=<B> > at-byte=<B>; check id` (cursor ahead), `partial-line bytes=<k> age=<s>`, `status=hung last-activity=<s>`, `exit=inconsistent`, `exit-code=<N>`. The last two can co-appear if the recorder wrote meta before a sweeper observed a torn recording.
+Possible preceding lines, in order: `dropped <k> lines (from-line=<N>, first-line=<F>)` / `dropped <k> bytes (from-byte=<B>, first-byte=<F>)` (gap), `from-line=<N> > next-line=<N>; check id` / `from-time=<T> > last-time=<T>; check id` / `from-byte=<B> > next-byte=<B>; check id` (cursor ahead), `partial-line bytes=<k> age=<s>`, `status=hung last-activity=<s>`, `exit=inconsistent`, `exit-code=<N>`. The last two can co-appear if the recorder wrote meta before a sweeper observed a torn recording.
 
 ## On-disk layout
 
@@ -57,7 +57,8 @@ Possible preceding lines, in order: `dropped <k> lines …` (gap), `since=<N> > 
       process.lock      # held by the recorder for its lifetime — liveness signal
       deadAt            # post-mortem marker; mtime = TTL clock, content = verdict
       stream.NNNN.log   # raw PTY bytes
-      lines.NNNN.idx    # binary line index: struct.pack(">Qd", n, t), one per line
+      lines.NNNN.idx    # binary line index: 8-byte header (>Q segment start byte)
+                        # then 24-byte records (>Qdq: n, t, line start byte), one per line
 ```
 
 The recorder appends to the highest-numbered pair; frozen segments are immutable until retention unlinks them. Session IDs are UUIDv4; chronological order comes from `meta.startedAt`.

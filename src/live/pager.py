@@ -40,8 +40,8 @@ class Line:
     """One recorded line. `text` includes its trailing newline.
 
     `end_byte` is the cumulative on-disk byte offset through the end of this
-    line, matching the `at-byte` value the verbose trailer would emit if a
-    reader stopped here.
+    line, used by the pager status bar to show byte position within the
+    rendered view.
     """
 
     text: bytes
@@ -99,7 +99,7 @@ def _scan_from(session_dir: Path, cursor: _ScanCursor) -> list[Line]:
         for j in range(skip, len(records)):
             if j >= len(chunks):
                 break
-            n, t = records[j]
+            n, t, _b = records[j]
             text = chunks[j]
             cumulative += len(text)
             out.append(Line(text=text, n=n, t=t, end_byte=cumulative))

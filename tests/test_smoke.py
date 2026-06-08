@@ -39,9 +39,9 @@ def test_full_cycle(project: Path, run_live) -> None:
     assert "two" in text and "three" in text
     assert "one" not in text.split("\n", 1)[0]
     assert f"id={info['id']}" in since.stderr
-    assert "at-line=3" in since.stderr
-    assert "at-time=" in since.stderr
-    assert "at-byte=" in since.stderr
+    assert "next-line=4" in since.stderr
+    assert "last-time=" in since.stderr
+    assert "next-byte=" in since.stderr
     assert "exit-code=0" in since.stderr
 
     missing = run_live(project, "cat", "nope", check=False)
@@ -71,4 +71,4 @@ def test_tail_n_plus_is_inclusive_unix_semantics(project: Path, run_live) -> Non
     # +5 is genuinely ahead: empty + warning.
     ahead = run_live(project, "tail", "-vn", "+5", "u")
     assert ahead.stdout == ""
-    assert "since=5 > at-line=3" in ahead.stderr
+    assert "from-line=5 > next-line=4" in ahead.stderr

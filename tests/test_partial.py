@@ -36,7 +36,7 @@ def test_partial_line_surfaces_in_tail(
                 i = idx.read_bytes()
             except FileNotFoundError:
                 return False
-            return len(i) == 16 and b"Continue?" in s and not s.endswith(b"\n")
+            return len(i) == 32 and b"Continue?" in s and not s.endswith(b"\n")
 
         assert wait_for(has_partial, timeout=8.0), "partial state never appeared"
 

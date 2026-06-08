@@ -59,7 +59,7 @@ def test_follow_streams_lines_as_they_arrive(project: Path, live_env, wait_for) 
         assert "follow-line-5" in body, body
         # Exit trailer.
         assert "exit-code=0" in stderr
-        assert "at-line=" in stderr
+        assert "next-line=" in stderr
     finally:
         if rec.poll() is None:
             rec.kill()

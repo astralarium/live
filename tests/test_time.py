@@ -1,4 +1,4 @@
-"""`live tail -t T` time-range filtering + trailer `at-time`."""
+"""`live tail -t T` time-range filtering + trailer `last-time`."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 _TRAILER_RE = re.compile(
-    r"live: id=([0-9a-f-]+) at-line=(\d+) at-time=([0-9.]+)"
+    r"live: id=([0-9a-f-]+) next-line=(\d+) next-byte=\d+ last-time=([0-9.]+)"
 )
 
 
@@ -31,7 +31,7 @@ def test_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
         "echo early-1; echo early-2; sleep 0.6; echo late-1; echo late-2",
     )
 
-    # Probe the trailer to learn the at-time, then filter by a midpoint time.
+    # Probe the trailer to learn the time, then filter by a midpoint.
     full = run_live(project, "tail", "-vn", "+0", "timed")
     _, _, end_time = _trailer(full.stderr)
     cut = end_time - 0.3  # somewhere between "early" and "late" writes
@@ -43,7 +43,7 @@ def test_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
     assert "early-1" not in body
     assert "early-2" not in body
     # -v requested -> trailer present.
-    assert "at-time=" in out.stderr
+    assert "last-time=" in out.stderr
 
 
 def test_time_quiet_without_verbose(project: Path, run_live) -> None:
@@ -62,7 +62,8 @@ def test_time_in_the_future_emits_cursor_ahead(project: Path, run_live) -> None:
     future = time.time() + 3600
     out = run_live(project, "tail", "-v", "-t", f"{future:.3f}", "fut")
     assert out.stdout.replace("\r", "") == ""
-    assert "time=" in out.stderr and "> at-time=" in out.stderr
+    assert "from-time=" in out.stderr
+    assert "> last-time=" in out.stderr
     assert "check id" in out.stderr
 
 
@@ -72,9 +73,9 @@ def test_trailer_at_time_advances_after_more_writes(project: Path, run_live) -> 
     _, _, t1 = _trailer(first.stderr)
 
     # Run again under the same NAME — new session, different uuid; the
-    # newest-match-wins selector picks it. Its at-time should be later.
+    # newest-match-wins selector picks it. Its time should be later.
     time.sleep(0.1)
     run_live(project, "run", "-n", "adv", "--", "sh", "-c", "echo b")
     second = run_live(project, "tail", "-vn", "+0", "adv")
     _, _, t2 = _trailer(second.stderr)
-    assert t2 > t1, f"expected at-time to advance: {t1} -> {t2}"
+    assert t2 > t1, f"expected time to advance: {t1} -> {t2}"

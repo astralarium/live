@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .config import Config
 from .format import (
+    IDX_HEADER,
     IDX_RECORD,
     INCONSISTENT_MARKER,
     Meta,
@@ -69,8 +70,10 @@ class _Recorder:
         self.stream_fd: int = -1
         self.idx_fd: int = -1
         self.stream_bytes: int = 0  # bytes in active stream segment
+        self.lifetime_bytes: int = 0  # cumulative bytes ever written (all segments)
         self.line_counter: int = 0  # absolute line number; n of NEXT completed line
         self.pending_line_start: float | None = None  # seconds; t for current partial
+        self.pending_line_start_byte: int | None = None  # lifetime byte of partial's first byte
         self.pending_line_bytes: int = 0  # bytes written to stream past last `\n`
 
         self.last_idx_touch: float = 0.0  # seconds
@@ -108,7 +111,11 @@ class _Recorder:
         self.idx_fd = os.open(str(idx_path), flags, 0o600)
         self.active_seg = seg
         self.stream_bytes = os.fstat(self.stream_fd).st_size
+        # Write segment-start header on first open of a fresh idx.
+        if os.fstat(self.idx_fd).st_size == 0:
+            self._write_all(self.idx_fd, IDX_HEADER.pack(self.lifetime_bytes))
         self.pending_line_start = None
+        self.pending_line_start_byte = None
         self.pending_line_bytes = 0
         self.last_idx_touch = time.time()
 
@@ -338,8 +345,10 @@ class _Recorder:
             return
 
         # Write stream first (prefix invariant).
+        chunk_start_lifetime = self.lifetime_bytes
         self._write_all(self.stream_fd, chunk)
         self.stream_bytes += len(chunk)
+        self.lifetime_bytes += len(chunk)
         start = 0
         while True:
             nl = chunk.find(b"\n", start)
@@ -347,22 +356,29 @@ class _Recorder:
                 if start < len(chunk):
                     if self.pending_line_start is None:
                         self.pending_line_start = time.time()
+                        self.pending_line_start_byte = chunk_start_lifetime + start
                     self.pending_line_bytes += len(chunk) - start
                 break
-            # `t` for this line = timestamp of its first byte.
+            # `t` / `byte_offset` for this line = timestamp / lifetime byte of its first byte.
             t = (
                 self.pending_line_start
                 if self.pending_line_start is not None
                 else time.time()
             )
+            line_start_byte = (
+                self.pending_line_start_byte
+                if self.pending_line_start_byte is not None
+                else chunk_start_lifetime + start
+            )
             self.line_counter += 1
             n = self.line_counter
             try:
-                self._write_all(self.idx_fd, IDX_RECORD.pack(n, t))
+                self._write_all(self.idx_fd, IDX_RECORD.pack(n, t, line_start_byte))
             except OSError:
                 raise
             self.last_idx_touch = time.time()
             self.pending_line_start = None
+            self.pending_line_start_byte = None
             self.pending_line_bytes = 0
             start = nl + 1
 

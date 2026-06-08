@@ -79,9 +79,9 @@ def test_should_strip_ansi_matrix(
 # ----- lines_in_segment / partial_tail_bytes -----
 
 
-def _records(n: int) -> list[tuple[int, float]]:
+def _records(n: int) -> list[tuple[int, float, int]]:
     """Stand-in idx records: only line numbers matter for these helpers."""
-    return [(i + 1, 0.0) for i in range(n)]
+    return [(i + 1, 0.0, 0) for i in range(n)]
 
 
 def test_lines_in_segment_splits_on_newlines() -> None:
@@ -108,10 +108,13 @@ def test_partial_tail_bytes_empty_when_all_indexed() -> None:
 
 
 def test_idx_record_pack_unpack_roundtrip() -> None:
-    n, t = 42, 1717200000.123456
-    buf = IDX_RECORD.pack(n, t)
-    assert len(buf) == 16
-    assert IDX_RECORD.unpack(buf) == (n, pytest.approx(t, abs=1e-9))
+    n, t, b = 42, 1717200000.123456, 12345678
+    buf = IDX_RECORD.pack(n, t, b)
+    assert len(buf) == 24
+    unpacked = IDX_RECORD.unpack(buf)
+    assert unpacked[0] == n
+    assert unpacked[1] == pytest.approx(t, abs=1e-9)
+    assert unpacked[2] == b
 
 
 def test_meta_roundtrips_through_dict() -> None:
@@ -153,7 +156,7 @@ def test_count_complete_lines_ignores_partial_tail(tmp_path) -> None:
 
 def test_idx_record_count(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
-    p.write_bytes(b"\x00" * 48)  # 3 records
+    p.write_bytes(b"\x00" * (8 + 3 * 24))  # 8-byte header + 3 records
     assert idx_record_count(p) == 3
 
 
@@ -166,7 +169,7 @@ def _stub(id_: str, name: str | None = None) -> SessionInfo:
         path=Path(f"/sessions/{id_}"),
         meta=Meta(id=id_, command=["sh"], cwd="/", started_at=0.0, name=name),
         status="exited",
-        watermarks=Watermarks(0, 0, 0, 0, 0),
+        watermarks=Watermarks(0, 0, 0, 0, 0, 0, 0),
         last_activity=0.0,
         exited_at=None,
         exit_code=None,

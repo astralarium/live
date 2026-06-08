@@ -37,12 +37,11 @@ def test_head_c_limits_to_first_k_bytes(project: Path, run_live) -> None:
 def test_head_verbose_trailer_carries_cursor(project: Path, run_live) -> None:
     sel = _setup_session(project, run_live)
     out = run_live(project, "head", "-vn", "4", sel)
-    # last_line = first_retained + emitted - 1 = 1 + 4 - 1 = 4
-    assert "at-line=4" in out.stderr
-    assert "at-time=" in out.stderr
-    m = re.search(r"at-byte=(\d+)", out.stderr)
+    # 4 lines emitted -> next-line = 5; 4 * len("lineN\r\n") = 28 bytes on disk.
+    assert "next-line=5" in out.stderr
+    assert "last-time=" in out.stderr
+    m = re.search(r"next-byte=(\d+)", out.stderr)
     assert m, out.stderr
-    # at-byte = emitted bytes on disk: 4 lines * len("lineN\r\n") = 28.
     assert int(m.group(1)) == 28
 
 
@@ -81,9 +80,9 @@ def test_head_t_complements_tail_t(project: Path, run_live) -> None:
         project, "run", "-n", "split", "--", "sh", "-c",
         "echo early-1; echo early-2; sleep 0.6; echo late-1; echo late-2",
     )
-    # Probe at-time at the end to learn the timestamp range.
+    # Probe the trailer time to learn the timestamp range.
     full = run_live(project, "tail", "-vn", "+0", "split")
-    m = re.search(r"at-time=([0-9.]+)", full.stderr)
+    m = re.search(r"last-time=([0-9.]+)", full.stderr)
     assert m, full.stderr
     end_t = float(m.group(1))
     cut = end_t - 0.3  # between early and late writes
