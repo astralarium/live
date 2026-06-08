@@ -188,14 +188,16 @@ def lines_since(
 
     stderr_lines: list[str] = []
     dropped = 0
-    if first_line and since < first_line:
-        dropped = first_line - since
+    # Line numbers are 1-indexed; treat since<1 as "from the start" with no gap.
+    effective_since = max(since, 1)
+    if first_line and effective_since < first_line:
+        dropped = first_line - effective_since
         stderr_lines.append(
             f"dropped {dropped} lines (since={since}, first retained={first_line})"
         )
         emit_from = first_line
     else:
-        emit_from = max(since, first_line) if first_line else 0
+        emit_from = max(effective_since, first_line) if first_line else 0
 
     out = bytearray()
     if first_line and emit_from <= last_line:

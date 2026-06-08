@@ -79,3 +79,13 @@ def test_since_after_retention_reports_gap(project: Path, run_live) -> None:
     poll = run_live(project, "tail", "-vn", "+0", "spam")
     assert "dropped" in poll.stderr
     assert "first retained=" in poll.stderr
+
+
+def test_cat_without_retention_emits_no_gap_warning(project: Path, run_live) -> None:
+    """`cat -v` on a fresh session must not emit a spurious 'dropped' warning.
+    Regression: cat_all called lines_since(since=0), and 0 < first_line=1 used
+    to wrongly trigger the gap path."""
+    run_live(project, "run", "-n", "fresh", "--", "echo", "foo")
+    out = run_live(project, "cat", "-v", "fresh")
+    assert out.stdout.replace("\r", "") == "foo\n"
+    assert "dropped" not in out.stderr
