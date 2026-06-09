@@ -32,41 +32,43 @@ python scripts/gen_docs.py
 
 ## Release
 
+Pushing a `vX.Y.Z` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the sdist and wheel, runs tests, and creates a GitHub Release with the artifacts attached.
+
 1. Bump `version` in [`pyproject.toml`](pyproject.toml).
 2. Commit and tag:
 
-    ```sh
-    git commit -am "release vX.Y.Z"
-    git tag vX.Y.Z
-    git push && git push --tags
-    ```
+   ```sh
+   git commit -am "release vX.Y.Z"
+   git tag vX.Y.Z
+   git push && git push --tags
+   ```
 
 3. Build sdist + wheel into `dist/`:
 
-    ```sh
-    rm -rf dist/
-    uv build
-    ```
+   ```sh
+   rm -rf dist/
+   uv build
+   ```
 
 4. Sanity-check the wheel installs cleanly in a throwaway env:
 
-    ```sh
-    uv tool install --from dist/live_cmd-X.Y.Z-py3-none-any.whl live-cmd
-    live --version
-    uv tool uninstall live-cmd
-    ```
+   ```sh
+   uv tool install --from dist/live_cmd-X.Y.Z-py3-none-any.whl live-cmd
+   live --version
+   uv tool uninstall live-cmd
+   ```
 
 5. Publish to TestPyPI first, install from it, smoke-test:
 
-    ```sh
-    uv publish --publish-url https://test.pypi.org/legacy/ --token "$TESTPYPI_TOKEN"
-    uv tool install --index https://test.pypi.org/simple/ live-cmd
-    ```
+   ```sh
+   uv publish --publish-url https://test.pypi.org/legacy/ --token "$TESTPYPI_TOKEN"
+   uv tool install --index https://test.pypi.org/simple/ live-cmd
+   ```
 
 6. Publish to PyPI:
 
-    ```sh
-    uv publish --token "$PYPI_TOKEN"
-    ```
+   ```sh
+   uv publish --token "$PYPI_TOKEN"
+   ```
 
 API tokens come from <https://pypi.org/manage/account/token/> (and the TestPyPI equivalent). Scope them to the `live-cmd` project once it's been registered.
