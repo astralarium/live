@@ -30,6 +30,12 @@ Agent guide:
 live llms.txt
 ```
 
+Or install the [agent skill](skills/live-cmd/SKILL.md):
+
+```bash
+npx skills add astralarium/live
+```
+
 ## Usage
 
 Record command:
