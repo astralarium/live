@@ -74,7 +74,7 @@ live: id=925f… next-line=42 next-byte=250 last-time=1800…
 Continue reading from next line:
 
 ```bash
-live tail -vN +42 server
+live tail -vn +42 server
 ```
 
 ## Config
