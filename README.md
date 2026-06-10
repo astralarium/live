@@ -24,16 +24,16 @@ Install shell completions:
 live update-shell
 ```
 
-Agent guide:
-
-```bash
-live llms.txt
-```
-
-Or install the [agent skill](skills/live-cmd/SKILL.md):
+Install [agent skill](https://github.com/astralarium/live/blob/main/skills/live-cmd/SKILL.md):
 
 ```bash
 npx skills add astralarium/live
+```
+
+Print [agent guide](https://github.com/astralarium/live/blob/main/REFERENCE.md#agent-guide):
+
+```
+live llms.txt
 ```
 
 ## Usage

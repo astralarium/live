@@ -429,6 +429,7 @@ def _delete_session(info: SessionInfo, *, force: bool) -> None:
 
 LLMS_TXT_PAYLOAD = """\
 This project uses `live`, a CLI streamer.
+See live-cmd skill for detailed usage.
 
 List sessions:
   live ls [-a] [--json] [<SELECTOR>]

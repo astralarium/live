@@ -206,10 +206,11 @@ options:
   -h, --help  show this help message and exit
 ```
 
-### Agent instructions
+### Agent guide
 
 ```
 This project uses `live`, a CLI streamer.
+See live-cmd skill for detailed usage.
 
 List sessions:
   live ls [-a] [--json] [<SELECTOR>]

@@ -73,7 +73,7 @@ def main() -> None:
     for v in verbs_:
         parts += [f"## `live {v}`", "", "```", live_help(v), "```", ""]
     parts += [
-        "### Agent instructions",
+        "### Agent guide",
         "",
         "```",
         live_run("llms.txt"),
