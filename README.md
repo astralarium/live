@@ -41,8 +41,8 @@ live llms.txt
 Record command:
 
 ```bash
-live run -n server npm start     # foreground
-live run -d -n server npm start  # detached; prints session UUID
+live run -n server npm start   # foreground
+live run -dn server npm start  # run detached; print session UUID
 ```
 
 Inspect sessions:
@@ -55,7 +55,7 @@ live tail -f server  # follow logs
 ```
 
 Select by name (newest match) or UUID prefix.
-Commands are scoped to sessions in the current directory (and descendants); pass `-C PATH` to scope to another directory, or `-g` for global scope.
+Commands are scoped the current directory (and descendants); pass `-C PATH` to scope directory, or `-g` for global scope.
 
 Stop and clean up:
 
