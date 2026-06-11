@@ -35,8 +35,7 @@ def strip_ansi(data: bytes) -> bytes:
 def strip_ansi_str(text: str) -> str:
     """Remove ANSI/VT escape sequences from a string.
 
-    Uses the same pattern as `parse_spans`, so the result equals its
-    concatenated chunks.
+    Equals the concatenated chunks of `parse_spans`.
     """
     return _ANSI_RE.sub("", text)
 
@@ -186,7 +185,7 @@ def _extended_color(
         if len(vals) == 3 and all(v is not None and 0 <= v <= 255 for v in vals):
             return rgb_to_256(*vals), i + 5
         return None, i + 5
-    # Unknown mode: consume only the 38/48 so later parameters still apply.
+    # Unknown mode: consume only the 38/48 so later params still apply.
     return None, i + 1
 
 

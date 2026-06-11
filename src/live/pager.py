@@ -18,7 +18,9 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field
+from itertools import groupby
 from pathlib import Path
+from typing import TypeVar
 
 from .ansi import (
     DEFAULT_STYLE,
@@ -131,10 +133,10 @@ def load_lines(session_dir: Path) -> list[Line]:
 
 
 def _display_text(line: Line) -> str:
-    """Decoded display text of a line: escapes intact, line ending trimmed.
+    """Decoded line text, escapes intact, line ending trimmed.
 
-    Single decode point for rendering, styling, and search, so they always
-    see identical text (decode order matters around invalid UTF-8).
+    Single decode point: render, styling, and search columns only agree if
+    they decode identically (order matters around invalid UTF-8).
     """
     return line.text.decode("utf-8", errors="replace").rstrip("\r\n")
 
@@ -152,6 +154,71 @@ def _cells(text: str) -> int:
     return sum(_cell_width(ch) for ch in text)
 
 
+_TAB_STOP = 8
+
+
+def _plain(text: str) -> bool:
+    """True when `text` expands to itself, one cell per char."""
+    return text.isascii() and text.isprintable()
+
+
+def _expand_pieces(text: str, col: int) -> tuple[list[str], int]:
+    """Per-char expansion pieces starting at cell `col`, and the end column.
+
+    Single source for `_expand` and `_expand_offsets`, so painted text and
+    highlight offsets can't drift.
+    """
+    out: list[str] = []
+    for ch in text:
+        if ch == "\t":
+            pad = _TAB_STOP - col % _TAB_STOP
+            out.append(" " * pad)
+            col += pad
+        elif ch < " " or ch == "\x7f":
+            out.append("^" + chr((ord(ch) + 64) & 0x7F))  # 0x7f -> ^?
+            col += 2
+        elif "\x80" <= ch <= "\x9f":
+            # C1 would reach the terminal as commands if painted raw.
+            out.append(f"<{ord(ch):02X}>")
+            col += 4
+        elif unicodedata.category(ch) == "Cf":
+            # Format chars render zero-width (drifting tab stops and
+            # highlight cells) or reorder the line (BiDi overrides).
+            piece = f"<U+{ord(ch):04X}>"
+            out.append(piece)
+            col += len(piece)
+        else:
+            out.append(ch)
+            col += _cell_width(ch)
+    return out, col
+
+
+def _expand(text: str, col: int) -> tuple[str, int]:
+    """Expand tabs and encode controls less-style (^G, <85>, <U+200B>).
+
+    Starts at cell `col`; leaves only position-independent widths, so
+    highlight columns stay exact. Returns the text and the end column.
+    """
+    if _plain(text):
+        return text, col + len(text)
+    pieces, col = _expand_pieces(text, col)
+    return "".join(pieces), col
+
+
+def _expand_offsets(text: str) -> list[int]:
+    """Char offset into `_expand(text, 0)[0]` for each offset into `text`.
+
+    `len(text) + 1` entries; the last is the expanded length.
+    """
+    if _plain(text):
+        return list(range(len(text) + 1))
+    pieces, _ = _expand_pieces(text, 0)
+    offs = [0]
+    for piece in pieces:
+        offs.append(offs[-1] + len(piece))
+    return offs
+
+
 def _clip_cells(text: str, budget: int) -> tuple[str, int]:
     """Longest prefix of `text` that fits in `budget` cells, and its width."""
     if text.isascii():
@@ -164,6 +231,15 @@ def _clip_cells(text: str, budget: int) -> tuple[str, int]:
             return text[:idx], cells
         cells += cw
     return text, cells
+
+
+_V = TypeVar("_V")
+
+
+def _evict_half(cache: dict[int, _V]) -> None:
+    """Drop the oldest half (insertion order) so the hot tail stays warm."""
+    for k in list(cache)[: len(cache) // 2]:
+        del cache[k]
 
 
 # ----- pure view state -----
@@ -194,10 +270,18 @@ class PagerState:
     prompt_buffer: str = ""
     help_active: bool = False
     help_view_top: int = 0  # scroll position within the help overlay
-    # visible_matches() memo: ((pattern, view_top, view_height, len(lines)), spans)
+    # visible_matches() memo, keyed by (pattern, view_top, view_height, len(lines))
     _match_cache: tuple[tuple[str, int, int, int], list[tuple[int, int, int]]] | None = (
-        field(default=None, repr=False)
+        field(default=None, repr=False, compare=False)
     )
+    # _decode() memo; the buffer is append-only, so entries never go stale.
+    _decode_cache: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
+    # Per-line match memo: line index -> (pattern, expanded match spans).
+    _line_matches: dict[int, tuple[str, list[tuple[int, int]]]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+
+    _MEMO_MAX = 4096  # per-cache entry cap; bounds memory on huge buffers
 
     def __post_init__(self) -> None:
         # On load, everything already in the buffer counts as "seen" — the
@@ -424,7 +508,7 @@ class PagerState:
             rng = range(start, -1, -1)
 
         for i in rng:
-            if regex.search(self._decode(self.lines[i])):
+            if regex.search(self._decode(i)):
                 self.search_last_match = i
                 # Scroll match to top of viewport (clamped at the tail).
                 self.view_top = max(0, min(self._max_view_top(), i))
@@ -434,15 +518,14 @@ class PagerState:
         return False
 
     def visible_matches(self) -> list[tuple[int, int, int]]:
-        """Per-viewport match spans: `(row, col_start, col_end)`.
+        """Match spans for the renderer's highlight overlay.
 
-        `row` is the row offset within the viewport. Used by the renderer to
-        highlight matches.
+        `(row, col_start, col_end)`: viewport row and char offsets into the
+        expanded display text. Rows ascend; spans ascend within a row.
         """
         if not self.search_pattern:
             return []
-        # The render loop calls this every frame; inputs only change on
-        # search, scroll, resize, or new lines.
+        # Called every frame; inputs change only on search/scroll/resize/feed.
         key = (self.search_pattern, self.view_top, self.view_height, len(self.lines))
         if self._match_cache is not None and self._match_cache[0] == key:
             return self._match_cache[1]
@@ -450,21 +533,54 @@ class PagerState:
         if regex is None:
             return []
         out: list[tuple[int, int, int]] = []
-        for row, line in enumerate(self.visible()):
-            text = self._decode(line)
-            for m in regex.finditer(text):
-                if m.end() == m.start():
-                    continue  # zero-width match; nothing to paint
-                out.append((row, m.start(), m.end()))
+        rows = min(self.view_height, len(self.lines) - self.view_top)
+        for row in range(rows):
+            out.extend(
+                (row, c0, c1)
+                for c0, c1 in self._line_matches_at(regex, self.view_top + row)
+            )
         self._match_cache = (key, out)
         return out
 
-    @staticmethod
-    def _decode(line: Line) -> str:
-        # Search runs against display text: decode first, then drop escapes,
-        # mirroring the render pipeline (`parse_spans` chunks) exactly so
-        # match columns align with what is painted.
-        return strip_ansi_str(_display_text(line))
+    def _line_matches_at(
+        self, regex: "re.Pattern[str]", i: int
+    ) -> list[tuple[int, int]]:
+        """Expanded-text match spans of line `i`, memoized per line.
+
+        Scrolling shifts the viewport over mostly-unchanged lines; the memo
+        keeps those from re-running the regex and offset expansion.
+        """
+        cached = self._line_matches.get(i)
+        if cached is not None and cached[0] == regex.pattern:
+            return cached[1]
+        raw = self._decode(i)
+        spans = [
+            (m.start(), m.end())
+            for m in regex.finditer(raw)
+            if m.end() > m.start()  # skip zero-width; nothing to paint
+        ]
+        if spans:
+            # Map raw-text match offsets onto the painted (expanded) text.
+            offs = _expand_offsets(raw)
+            spans = [(offs[s], offs[e]) for s, e in spans]
+        if len(self._line_matches) >= self._MEMO_MAX:
+            _evict_half(self._line_matches)
+        self._line_matches[i] = (regex.pattern, spans)
+        return spans
+
+    def _decode(self, i: int) -> str:
+        """Search text of line `i`: escapes stripped, tabs/controls raw.
+
+        Raw text keeps `\\t`-style patterns matchable; `visible_matches`
+        maps match offsets onto the painted text.
+        """
+        cached = self._decode_cache.get(i)
+        if cached is None:
+            cached = strip_ansi_str(_display_text(self.lines[i]))
+            if len(self._decode_cache) >= self._MEMO_MAX:
+                _evict_half(self._decode_cache)
+            self._decode_cache[i] = cached
+        return cached
 
     # ----- derived state -----
 
@@ -795,8 +911,7 @@ class _AttrMap:
     Color pairs are allocated lazily per (fg, bg) combo and capped by
     COLOR_PAIRS; combos past the cap render with text attributes only.
     Palette indices beyond the terminal's COLORS are approximated down;
-    bright foregrounds folded onto an 8-color terminal keep their
-    brightness as A_BOLD, whichever SGR syntax produced them.
+    bright foregrounds folded to 8 colors keep their brightness as A_BOLD.
     """
 
     def __init__(self) -> None:
@@ -828,8 +943,7 @@ class _AttrMap:
             return a
         fg, fg_folded = self._fit(style.fg)
         bg, _ = self._fit(style.bg)
-        if fg_folded:
-            # Bold has no effect on the background, so only fg degrades this way.
+        if fg_folded:  # bold only affects the foreground; bg brightness is lost
             a |= curses.A_BOLD
         if (fg, bg) != (-1, -1):
             a |= curses.color_pair(self._pair(fg, bg))
@@ -872,10 +986,9 @@ class _AttrMap:
 class _LineStyleCache:
     """Start-of-line styles and parsed spans for the (append-only) buffer.
 
-    SGR state persists across newlines in terminal output, so a color opened
-    on one line affects every following line until reset. Start styles are
-    computed once per line and extended incrementally as new lines arrive;
-    spans are memoized per line so an idle render loop repaints from cache.
+    SGR state persists across newlines, so styles carry over until reset.
+    Start styles extend incrementally as lines arrive; spans are memoized
+    so an idle render loop repaints from cache.
     """
 
     _SPANS_MAX = 4096  # bounds memory when scrubbing through huge buffers
@@ -889,8 +1002,7 @@ class _LineStyleCache:
         while len(self._starts) <= i:
             j = len(self._starts)
             self._starts.append(self._end)
-            # A line with no escape bytes cannot change SGR state, so the
-            # catch-up scan after a deep jump only parses styled lines.
+            # Escape-free lines can't change SGR state; skip the parse.
             if b"\x1b" in lines[j].text:
                 _, self._end = parse_spans(_display_text(lines[j]), self._end)
         return self._starts[i]
@@ -903,7 +1015,13 @@ class _LineStyleCache:
         cached = self._spans.get(i)
         if cached is None:
             start = self.start_style(lines, i) if styled else DEFAULT_STYLE
-            cached, _ = parse_spans(_display_text(lines[i]), start)
+            parsed, _ = parse_spans(_display_text(lines[i]), start)
+            # Tab stops depend on the running cell column across chunks.
+            col = 0
+            cached = []
+            for chunk, style in parsed:
+                chunk, col = _expand(chunk, col)
+                cached.append((chunk, style))
             if len(self._spans) >= self._SPANS_MAX:
                 self._spans.clear()
             self._spans[i] = cached
@@ -1151,37 +1269,47 @@ def _render(
             # Past-end placeholder, matches less/vim.
             _safe_addstr(stdscr, i, 0, "~")
             continue
-        col = 0  # in cells: wide chars occupy two, so len(chunk) won't do
+        col = 0  # cells, not chars: wide glyphs occupy two
         for chunk, style in styles.spans(
             state.lines, state.view_top + i, styled=color
         ):
             if col >= w - 1:
                 break
-            chunk, cells = _clip_cells(chunk, w - 1 - col)
-            _safe_addstr(stdscr, i, col, chunk, attrs.attr(style) if color else 0)
+            clipped, cells = _clip_cells(chunk, w - 1 - col)
+            _safe_addstr(stdscr, i, col, clipped, attrs.attr(style) if color else 0)
             col += cells
+            if len(clipped) < len(chunk):
+                # Clipped mid-chunk (wide glyph at the edge): later chunks
+                # would paint at the unadvanced col, left of their cells.
+                break
 
-    # Highlight visible search matches (after content is painted so chgat
-    # overlays them in place). Match columns are character offsets into the
-    # display text; convert to cells to land on the painted glyphs.
+    # Overlay search highlights; match columns are char offsets into the
+    # expanded display text, converted to cells to land on the painted glyphs.
     if state.search_pattern:
-        for row, c0, c1 in state.visible_matches():
+        for row, group in groupby(state.visible_matches(), key=lambda m: m[0]):
             if row >= content_rows:
-                continue
+                break  # rows ascend
             text = "".join(
                 chunk
                 for chunk, _ in styles.spans(
                     state.lines, state.view_top + row, styled=color
                 )
             )
-            start = _cells(text[:c0])
-            n = min(_cells(text[c0:c1]), max(0, w - 1 - start))
-            if n <= 0:
-                continue
-            try:
-                stdscr.chgat(row, start, n, curses.A_REVERSE)
-            except curses.error:
-                pass
+            # Spans ascend within the row: one pass converts offsets to cells.
+            pos = 0
+            cell = 0
+            for _, c0, c1 in group:
+                cell += _cells(text[pos:c0])
+                start = cell
+                cell += _cells(text[c0:c1])
+                pos = c1
+                n = min(cell - start, max(0, w - 1 - start))
+                if n <= 0:
+                    continue
+                try:
+                    stdscr.chgat(row, start, n, curses.A_REVERSE)
+                except curses.error:
+                    pass
 
     # Bottom row: prompt during search entry, otherwise the status bar.
     if state.prompt_active:

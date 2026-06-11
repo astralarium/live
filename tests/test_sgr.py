@@ -11,7 +11,15 @@ from live.ansi import (
     strip_ansi_str,
     to_base16,
 )
-from live.pager import Line, PagerState, _LineStyleCache, _cells, _clip_cells
+from live.pager import (
+    Line,
+    PagerState,
+    _LineStyleCache,
+    _cells,
+    _clip_cells,
+    _expand,
+    _expand_offsets,
+)
 
 
 def _spans(text: str, start: Style = DEFAULT_STYLE):
@@ -189,13 +197,34 @@ def test_search_matches_against_display_text() -> None:
     assert s.visible_matches() == [(0, 3, 8)]
 
 
-def test_search_text_equals_rendered_text_on_invalid_utf8() -> None:
+def test_search_text_expands_to_rendered_text_on_invalid_utf8() -> None:
     # An escape interrupting a multi-byte UTF-8 char: search must see the
     # same replacement chars the renderer paints, or highlight columns shift.
     raw = b"\xe2\x82\x1b[31m\xac cd ef\n"
     line = Line(text=raw, n=1, t=1.0, end_byte=len(raw))
     rendered = "".join(c for c, _ in _LineStyleCache().spans([line], 0))
-    assert PagerState._decode(line) == rendered
+    assert _expand(PagerState(lines=[line])._decode(0), 0)[0] == rendered
+
+
+def test_expanded_spans_equal_expanded_search_text() -> None:
+    # The invariant behind highlight alignment: the painted text (joined
+    # expanded spans) equals the expansion of the search text, so
+    # `_expand_offsets` indexes exactly what is on screen.
+    nasty = [
+        b"plain ascii\n",
+        b"a\tb\x1b[31m\tc\x1b[0m\td\n",  # tabs across styled chunks
+        b"\x1b[1;32m\xe6\x97\xa5\t\xe6\x9c\xac\x07\n",  # wide + tab + BEL
+        b"\xe2\x82\x1b[31m\xac mid-rune escape\n",  # invalid UTF-8
+        b"a\xc2\x85b\xc2\x9bc\n",  # C1 controls
+        b"zero\xe2\x80\x8bwidth \xe2\x80\xaebidi\n",  # ZWSP + RLO
+        b"\x1b[31m\t\x1b[0m\t\n",  # escapes between tabs
+    ]
+    for raw in nasty:
+        line = Line(text=raw, n=1, t=1.0, end_byte=len(raw))
+        painted = "".join(c for c, _ in _LineStyleCache().spans([line], 0))
+        search = PagerState(lines=[line])._decode(0)
+        assert _expand(search, 0)[0] == painted, raw
+        assert _expand_offsets(search)[len(search)] == len(painted), raw
 
 
 def test_style_cache_skips_escape_free_lines() -> None:
@@ -203,6 +232,57 @@ def test_style_cache_skips_escape_free_lines() -> None:
     lines = [_line(1, "\x1b[36mopen cyan\n"), _line(2, "plain\n"), _line(3, "x\n")]
     cache = _LineStyleCache()
     assert cache.start_style(lines, 2) == Style(fg=6)
+
+
+def test_tabs_expand_to_tab_stops_across_spans() -> None:
+    # Tab stops are cell-based, so expansion must thread the running column
+    # through styled chunks (escapes are zero-width).
+    line = _line(1, "a\tb\x1b[31m\tc\n")
+    spans = _LineStyleCache().spans([line], 0)
+    text = "".join(c for c, _ in spans)
+    assert text == "a       b       c"  # b at col 8, c at col 16
+
+
+def test_search_matches_raw_tabs_and_highlights_expanded() -> None:
+    # Patterns match raw text (so `\t` works); highlight columns index the
+    # expanded text.
+    s = PagerState(lines=[_line(1, "a\tb\x1b[31m\tc\n")])
+    s.resize(5)
+    s.search_pattern = "b\tc"
+    assert s.visible_matches() == [(0, 8, 17)]  # "b       c" in painted text
+
+
+def test_control_chars_render_in_caret_notation() -> None:
+    line = _line(1, "a\x07b\rc\x7fd\n")
+    text = "".join(c for c, _ in _LineStyleCache().spans([line], 0))
+    assert text == "a^Gb^Mc^?d"
+    s = PagerState(lines=[line])
+    s.resize(5)
+    s.search_pattern = "\x07b"
+    assert s.visible_matches() == [(0, 1, 4)]  # covers "^Gb" in painted text
+
+
+def test_c1_controls_render_as_hex() -> None:
+    raw = b"a\xc2\x85b\n"  # U+0085 NEL would move the cursor if painted raw
+    line = Line(text=raw, n=1, t=1.0, end_byte=len(raw))
+    text = "".join(c for c, _ in _LineStyleCache().spans([line], 0))
+    assert text == "a<85>b"
+    s = PagerState(lines=[line])
+    s.resize(5)
+    s.search_pattern = "\x85"
+    assert s.visible_matches() == [(0, 1, 5)]  # covers "<85>" in painted text
+
+
+def test_format_chars_render_as_unicode_hex() -> None:
+    # Cf chars render zero-width (drifting tab stops past them) or, for BiDi
+    # overrides, reorder the painted line — encode them like C1.
+    line = _line(1, "a\u200bb\u202ec\n")
+    text = "".join(c for c, _ in _LineStyleCache().spans([line], 0))
+    assert text == "a<U+200B>b<U+202E>c"
+    s = PagerState(lines=[line])
+    s.resize(5)
+    s.search_pattern = "\u200bb"
+    assert s.visible_matches() == [(0, 1, 10)]  # covers "<U+200B>b"
 
 
 def test_cell_width_helpers() -> None:
