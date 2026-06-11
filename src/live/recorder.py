@@ -13,6 +13,7 @@ import os
 import pty
 import select
 import signal
+import struct
 import termios
 import time
 import tty
@@ -40,6 +41,18 @@ from .paths import session_dir
 TIOCGWINSZ = getattr(termios, "TIOCGWINSZ", 0x40087468)
 TIOCSWINSZ = getattr(termios, "TIOCSWINSZ", 0x80087467)
 
+# PTY size when there's no controlling terminal and no --geometry.
+DEFAULT_GEOMETRY = (80, 24)  # (cols, rows)
+
+# After forwarding SIGTERM/SIGHUP, SIGKILL the child's process group if it
+# hasn't exited. Must undercut STOP_KILL_DEADLINE_SEC so the recorder still
+# exits gracefully (meta -> deadAt -> unlock) before `live stop` SIGKILLs it.
+TERM_KILL_GRACE_SEC = 3.0
+
+# How long `live stop` waits for the recorder's flock release after SIGTERM
+# before SIGKILLing the recorder itself.
+STOP_KILL_DEADLINE_SEC = 5.0
+
 
 class _Recorder:
     def __init__(
@@ -47,10 +60,14 @@ class _Recorder:
         cfg: Config,
         command: list[str],
         name: str | None,
+        detach: bool = False,
+        geometry: tuple[int, int] | None = None,
     ):
         self.cfg = cfg
         self.command = command
         self.name = name
+        self.detach = detach
+        self.geometry = geometry
 
         self.session_id = str(uuid.uuid4())
         self.dir: Path = session_dir(self.session_id)
@@ -78,6 +95,7 @@ class _Recorder:
 
         self.last_idx_touch: float = 0.0  # seconds
         self.exited_by_signal: int | None = None
+        self.term_at: float | None = None  # first SIGTERM/SIGHUP arrival
         self.inconsistent: bool = False
 
         self._saved_tty: list | None = None
@@ -123,9 +141,16 @@ class _Recorder:
 
     def run(self) -> int:
         """pty.fork + execvp the child, run the select loop, return child exit code."""
-        # Seed initial PTY size from stdin's window before fork so the child
-        # sees the right dimensions.
-        winsize = self._get_winsize_from_stdin()
+        # Seed the PTY size: explicit --geometry wins, else stdin's window,
+        # else 80x24 — a TTY-less recorder must not leave the child at 0x0.
+        if self.geometry is not None:
+            cols, rows = self.geometry
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        else:
+            winsize = self._get_winsize_from_stdin()
+            if winsize is None:
+                cols, rows = DEFAULT_GEOMETRY
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
 
         self.child_pid, self.master_fd = pty.fork()
         if self.child_pid == 0:
@@ -141,8 +166,7 @@ class _Recorder:
                 os._exit(126)
 
         # Parent
-        if winsize is not None:
-            self._set_winsize(self.master_fd, winsize)
+        self._set_winsize(self.master_fd, winsize)
 
         self._set_terminal_title()
         self._install_signals()
@@ -219,13 +243,19 @@ class _Recorder:
 
         def _on_termish(sig, _frm):
             self.exited_by_signal = sig
+            if self.term_at is None:
+                self.term_at = time.time()
             # Forward to child; it will exit, our select loop will see EIO.
+            # If it ignores the signal, the loop escalates to SIGKILL after
+            # TERM_KILL_GRACE_SEC.
             try:
                 os.kill(self.child_pid, sig)
             except (ProcessLookupError, PermissionError):
                 pass
 
-        signal.signal(signal.SIGWINCH, _on_winch)
+        # Explicit --geometry pins the size; don't track terminal resizes.
+        if self.geometry is None:
+            signal.signal(signal.SIGWINCH, _on_winch)
         signal.signal(signal.SIGTERM, _on_termish)
         signal.signal(signal.SIGHUP, _on_termish)
         # SIGINT: only install a handler when stdin is NOT a TTY.
@@ -237,11 +267,16 @@ class _Recorder:
 
     def _select_loop(self) -> int:
         heartbeat = self.cfg.heartbeat_sec
+        watch = [self.master_fd, self._wakeup_r]
+        if not self.detach:
+            watch.append(0)
         while True:
+            timeout = heartbeat
+            if self.term_at is not None:
+                deadline = self.term_at + TERM_KILL_GRACE_SEC
+                timeout = min(timeout, max(deadline - time.time(), 0))
             try:
-                rlist, _, _ = select.select(
-                    [0, self.master_fd, self._wakeup_r], [], [], heartbeat
-                )
+                rlist, _, _ = select.select(watch, [], [], timeout)
             except InterruptedError:
                 continue
             except OSError as e:
@@ -251,6 +286,12 @@ class _Recorder:
 
             now = time.time()
 
+            # A forwarded SIGTERM/SIGHUP the child ignored must not leave it
+            # running past `live stop`'s deadline: SIGKILL its process group.
+            if self.term_at is not None and now - self.term_at >= TERM_KILL_GRACE_SEC:
+                self.term_at = None
+                self._kill_child_group()
+
             # Drain wakeup pipe (signals already ran their handlers).
             if self._wakeup_r in rlist:
                 try:
@@ -258,7 +299,8 @@ class _Recorder:
                 except BlockingIOError:
                     pass
 
-            # Forward stdin -> child PTY.
+            # Forward stdin -> child PTY. On EOF, stop watching fd 0 or
+            # select would report it readable forever.
             if 0 in rlist:
                 try:
                     data = os.read(0, 4096)
@@ -269,6 +311,8 @@ class _Recorder:
                         os.write(self.master_fd, data)
                     except OSError:
                         pass
+                else:
+                    watch.remove(0)
 
             # Drain PTY -> mirror to stdout, record.
             if self.master_fd in rlist:
@@ -280,12 +324,13 @@ class _Recorder:
                     # Child closed PTY -> exited.
                     break
                 # Mirror to terminal (best-effort; ignore SIGPIPE-like errors).
-                try:
-                    n = 0
-                    while n < len(chunk):
-                        n += os.write(1, chunk[n:])
-                except OSError:
-                    pass
+                if not self.detach:
+                    try:
+                        n = 0
+                        while n < len(chunk):
+                            n += os.write(1, chunk[n:])
+                    except OSError:
+                        pass
                 # Record.
                 try:
                     self._record_chunk(chunk)
@@ -430,6 +475,18 @@ class _Recorder:
 
     # ----- shutdown -----
 
+    def _kill_child_group(self) -> None:
+        """SIGKILL the child's process group (pty.fork made it a session
+        leader, so pgid == pid and same-group descendants die with it).
+        No reap here; the select loop exits normally on PTY EOF."""
+        try:
+            os.killpg(self.child_pid, signal.SIGKILL)
+        except OSError:
+            try:
+                os.kill(self.child_pid, signal.SIGKILL)
+            except OSError:
+                pass
+
     def _kill_child(self) -> None:
         try:
             os.kill(self.child_pid, signal.SIGKILL)
@@ -462,8 +519,91 @@ def record(
     cfg: Config,
     command: list[str],
     name: str | None = None,
+    geometry: tuple[int, int] | None = None,
+    after_setup=None,
 ) -> int:
-    """Run `command` under live recording. Returns its exit code."""
-    rec = _Recorder(cfg, command, name)
+    """Run `command` under live recording. Returns its exit code.
+
+    `after_setup` (if given) runs once the session is publicly visible
+    (dir + lock + meta), before the child is forked.
+    """
+    rec = _Recorder(cfg, command, name, geometry=geometry)
     rec.setup_session()
+    if after_setup is not None:
+        after_setup()
     return rec.run()
+
+
+def _fd_above_std(fd: int) -> int:
+    """Move `fd` to >= 3 — the detach dup2 dance clobbers 0-2, which the
+    pipe may occupy when the CLI was started with closed std fds."""
+    if fd > 2:
+        return fd
+    new_fd = fcntl.fcntl(fd, fcntl.F_DUPFD, 3)
+    os.close(fd)
+    return new_fd
+
+
+def record_detached(
+    cfg: Config,
+    command: list[str],
+    name: str | None = None,
+    geometry: tuple[int, int] | None = None,
+) -> tuple[str | None, str | None]:
+    """Fork a recorder that survives the calling shell; don't wait for it.
+
+    The child detaches (`setsid`, fds on /dev/null) and reports back over a
+    pipe once the session dir + lock exist, so the session is visible to
+    `live ls` by the time this returns. Returns `(session_id, error)`:
+    exactly one is non-None.
+    """
+    read_fd, write_fd = os.pipe()
+    read_fd = _fd_above_std(read_fd)
+    write_fd = _fd_above_std(write_fd)
+    pid = os.fork()
+    if pid == 0:
+        # Child: never return into the caller's stack.
+        status = 1
+        try:
+            os.close(read_fd)
+            devnull = os.open(os.devnull, os.O_RDWR)
+            os.dup2(devnull, 0)
+            os.dup2(devnull, 1)
+            os.dup2(devnull, 2)
+            if devnull > 2:
+                os.close(devnull)
+            os.setsid()
+            rec = _Recorder(cfg, command, name, detach=True, geometry=geometry)
+            try:
+                rec.setup_session()
+            except Exception as e:
+                os.write(write_fd, f"err {e}\n".encode("utf-8", "replace"))
+                os._exit(1)
+            os.write(write_fd, f"ok {rec.session_id}\n".encode("ascii"))
+            os.close(write_fd)
+            status = rec.run()
+        except BaseException:
+            pass
+        finally:
+            os._exit(status)
+
+    # Parent: read the child's one-line report, then leave it running.
+    os.close(write_fd)
+    chunks = []
+    while True:
+        try:
+            buf = os.read(read_fd, 4096)
+        except OSError:
+            break
+        if not buf:
+            break
+        chunks.append(buf)
+        if buf.endswith(b"\n"):
+            break
+    os.close(read_fd)
+    report = b"".join(chunks).decode("utf-8", "replace").strip()
+    if report.startswith("ok "):
+        return report[3:], None
+    if report.startswith("err "):
+        return None, report[4:]
+    return None, "detached recorder failed to start"

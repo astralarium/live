@@ -71,6 +71,31 @@ def read_lock_pid(lock_path: Path) -> int | None:
         return None
 
 
+class HeldLock:
+    """Blocking exclusive flock, held until `release()` (idempotent).
+
+    O_CLOEXEC drops the fd in exec'd children; a forked child inherits it,
+    but flock is per open-file-description, so the parent's LOCK_UN releases
+    the lock regardless.
+    """
+
+    def __init__(self, lock_path: Path):
+        self._fd = os.open(
+            str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_CLOEXEC, 0o600
+        )
+        fcntl.flock(self._fd, fcntl.LOCK_EX)
+
+    def release(self) -> None:
+        if self._fd < 0:
+            return
+        fd, self._fd = self._fd, -1
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 def kill_pid(pid: int, sig: int) -> bool:
     """Send signal to pid. Returns False if the process doesn't exist."""
     try:

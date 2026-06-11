@@ -12,6 +12,28 @@ from . import __version__
 from . import verbs
 
 _AGE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([dhms])\s*$")
+_NAME_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
+_GEOMETRY_RE = re.compile(r"^(\d{1,5})x(\d{1,5})$")
+
+
+def _parse_geometry(value: str) -> tuple[int, int]:
+    """`COLSxROWS` (e.g. `200x24`) -> `(cols, rows)`, each 1-65535."""
+    m = _GEOMETRY_RE.match(value)
+    if m:
+        cols, rows = int(m.group(1)), int(m.group(2))
+        if 0 < cols <= 65535 and 0 < rows <= 65535:
+            return cols, rows
+    raise argparse.ArgumentTypeError(f"expected COLSxROWS, e.g. 200x24 (got {value!r})")
+
+
+def _parse_name(value: str) -> str:
+    """Names are shell-safe: letters, digits, `.`, `_`, `-`; no leading `-`."""
+    if _NAME_RE.match(value):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"expected letters, digits, '.', '_', or '-', "
+        f"not starting with '-' (got {value!r})"
+    )
 
 
 def _parse_age(value: str) -> float:
@@ -81,7 +103,26 @@ def _make_parser() -> argparse.ArgumentParser:
         description="Run a command under a PTY and record its output.",
         formatter_class=_Formatter,
     )
-    run_p.add_argument("-n", "--name", default=None, help="Session name.")
+    run_p.add_argument(
+        "-n",
+        "--name",
+        type=_parse_name,
+        default=None,
+        help="Session name (letters, digits, '.', '_', '-').",
+    )
+    run_p.add_argument(
+        "-d",
+        "--detach",
+        action="store_true",
+        help="Detach: run in the background, print session id.",
+    )
+    run_p.add_argument(
+        "--geometry",
+        type=_parse_geometry,
+        default=None,
+        metavar="COLSxROWS",
+        help="PTY size (default: the terminal's size, else 80x24).",
+    )
     run_p.add_argument(
         "cmd",
         nargs=argparse.REMAINDER,
@@ -264,6 +305,29 @@ def _make_parser() -> argparse.ArgumentParser:
     ag.add_argument("--raw", action="store_true", dest="raw", help="Keep ANSI.")
     less_p.add_argument("selector", help="NAME or UUID-prefix.")
     less_p.set_defaults(func=verbs.cmd_less)
+
+    # stop
+    stop_p = sub.add_parser(
+        "stop",
+        help="Stop running sessions.",
+        description="Stop running sessions.",
+        formatter_class=_Formatter,
+    )
+    stop_p.add_argument(
+        "-g",
+        "--global",
+        action="store_true",
+        dest="global_",
+        help="Global scope.",
+    )
+    stop_p.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_",
+        help="Stop all running sessions.",
+    )
+    stop_p.add_argument("selectors", nargs="*", help="NAME(s) or UUID-prefix(es).")
+    stop_p.set_defaults(func=verbs.cmd_stop)
 
     # rm
     rm_p = sub.add_parser(

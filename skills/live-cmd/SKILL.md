@@ -15,10 +15,14 @@ output. No daemons; state lives in `~/.live`.
 ```bash
 live run -n server npm start        # run under a PTY, record output
 live run -n build -- make -j8       # use `--` if the command has flags
+live run -d -n server npm start     # detach: return immediately, print UUID
 ```
 
 The command's stdout and stderr are merged into one log. Large logs
 auto-rotate (oldest segments dropped past the cap).
+
+With `-d` the process survives shell exit; read its output later with
+`cat`/`tail` and end it with `live stop`.
 
 ## Find sessions
 
@@ -71,9 +75,11 @@ continue from `first-line`/`first-byte`.
 A session is done when stderr shows `exit-code=`. Time-based reads are also
 available: `head -t <T>` (lines at or before epoch T), `tail -t <T>` (after T).
 
-## Clean up
+## Stop and clean up
 
 ```bash
+live stop server                 # SIGTERM a running session
+live stop --all                  # stop everything running in scope
 live rm server                   # remove a session
 live rm -f server                # SIGTERM a live run first
 live rm --exited --older-than 1d

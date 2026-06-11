@@ -30,6 +30,11 @@ def state_path() -> Path:
     return live_dir() / STATE_NAME
 
 
+def name_lock_path() -> Path:
+    """Global lock serializing named-run conflict check + session creation."""
+    return live_dir() / "name.lock"
+
+
 def session_dir(session_id: str) -> Path:
     return sessions_dir() / session_id
 

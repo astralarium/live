@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import Config, load_config
-from .lock import kill_pid, probe_held, read_lock_pid
+from .lock import HeldLock, kill_pid, probe_held, read_lock_pid
 from .reader import (
     ReadResult,
     bytes_since,
@@ -26,7 +26,8 @@ from .reader import (
     strip_ansi,
     tail_last,
 )
-from .recorder import record
+from .paths import name_lock_path, within_cwd
+from .recorder import STOP_KILL_DEADLINE_SEC, record, record_detached
 from .session import (
     STATUS_DEAD,
     NoSuchSelectorError,
@@ -102,7 +103,61 @@ def cmd_run(args) -> int:
     if not cmd:
         _err("run: missing command")
         return 2
-    return record(cfg, cmd, name=args.name)
+
+    # Named runs serialize on a global lock spanning the conflict check and
+    # session creation (meta is written before release), so concurrent
+    # `run -n NAME` can't both pass the check or hide mid-startup.
+    guard = HeldLock(name_lock_path()) if args.name is not None else None
+    try:
+        if args.name is not None:
+            # Conflict when either cwd contains the other — i.e. some scope
+            # would see both sessions under one name. Siblings/disjoint dirs
+            # may share it. Only in-scope runs get the stop hint: an
+            # ancestor's run is out of scope here, and a child shouldn't be
+            # told how to kill its parent.
+            cwd = Path.cwd()
+            in_scope: list[SessionInfo] = []
+            ancestors: list[SessionInfo] = []
+            for s in list_sessions(cfg):
+                if s.meta.name != args.name or s.status in STATUS_DEAD:
+                    continue
+                if within_cwd(s.meta.cwd, cwd):
+                    in_scope.append(s)
+                elif within_cwd(str(cwd), Path(s.meta.cwd)):
+                    ancestors.append(s)
+            if in_scope:
+                _err(
+                    f"run: session '{args.name}' is already running "
+                    f"(id {in_scope[0].id[:8]}); run `live stop {args.name}` first"
+                )
+                return 1
+            if ancestors:
+                _err(
+                    f"run: session '{args.name}' is already running "
+                    f"in ancestor {ancestors[0].meta.cwd} (id {ancestors[0].id[:8]})"
+                )
+                return 1
+
+        if args.detach:
+            session_id, error = record_detached(
+                cfg, cmd, name=args.name, geometry=args.geometry
+            )
+            if error is not None:
+                _err(f"run: {error}")
+                return 1
+            print(session_id)
+            return 0
+
+        return record(
+            cfg,
+            cmd,
+            name=args.name,
+            geometry=args.geometry,
+            after_setup=guard.release if guard is not None else None,
+        )
+    finally:
+        if guard is not None:
+            guard.release()
 
 
 def cmd_ls(args) -> int:
@@ -402,34 +457,110 @@ def cmd_rm(args) -> int:
     return 1 if any_error else 0
 
 
+def cmd_stop(args) -> int:
+    if not args.selectors and not args.all_:
+        _err("stop: missing selector (use NAME, UUID-prefix, or --all)")
+        return 2
+
+    cfg = load_config()
+    sweep_all(cfg)
+    sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
+
+    base: list[SessionInfo] = []
+    any_error = False
+
+    if args.all_:
+        base.extend(s for s in sessions if s.status not in STATUS_DEAD)
+
+    for token in args.selectors or []:
+        try:
+            matches = resolve_many(sessions, token)
+        except SelectorError as e:
+            _err(str(e))
+            any_error = True
+            continue
+        running = [s for s in matches if s.status not in STATUS_DEAD]
+        if not running:
+            _err(f"stop: {token}: not running")
+            any_error = True
+            continue
+        base.extend(running)
+
+    seen: set[str] = set()
+    targets: list[SessionInfo] = []
+    for s in base:
+        if s.id not in seen:
+            seen.add(s.id)
+            targets.append(s)
+    try:
+        _stop_recorders(targets)
+    except Exception as e:
+        _err(f"stop: {e}")
+        return 1
+    for s in targets:
+        print(s.id)
+
+    return 1 if any_error else 0
+
+
+def _stop_recorder(info: SessionInfo) -> None:
+    """SIGTERM the recorder; SIGKILL if the flock isn't released in time."""
+    _stop_recorders([info])
+
+
+def _stop_recorders(infos: list[SessionInfo]) -> None:
+    """SIGTERM each recorder; SIGKILL any whose flock isn't released within
+    STOP_KILL_DEADLINE_SEC. One shared deadline, so N stuck sessions cost
+    one wait, not N."""
+    from .format import LOCK_NAME
+
+    pending: list[tuple[Path, int]] = []
+    for info in infos:
+        lock_path = info.path / LOCK_NAME
+        # Re-probe liveness now: the caller's status snapshot may be stale,
+        # and an exited recorder's lock file keeps its (possibly recycled)
+        # pid.
+        if probe_held(lock_path) is not True:
+            continue
+        pid = read_lock_pid(lock_path)
+        if not pid:
+            continue
+        kill_pid(pid, signal.SIGTERM)
+        pending.append((lock_path, pid))
+
+    deadline = time.time() + STOP_KILL_DEADLINE_SEC
+    while pending:
+        pending = [lp for lp in pending if probe_held(lp[0]) is True]
+        if not pending or time.time() >= deadline:
+            break
+        time.sleep(0.1)
+    for _, pid in pending:
+        kill_pid(pid, signal.SIGKILL)
+    if pending:
+        time.sleep(0.2)
+
+
 def _delete_session(info: SessionInfo, *, force: bool) -> None:
     """Delete a session directory. If running and force=True, kill the recorder."""
     from .format import LOCK_NAME
 
     lock_path = info.path / LOCK_NAME
-    held = probe_held(lock_path)
-    if held is True:
+    if probe_held(lock_path) is True:
         if not force:
             raise RuntimeError(f"session {info.id[:8]} is running (use -f)")
-        pid = read_lock_pid(lock_path)
-        if pid:
-            kill_pid(pid, signal.SIGTERM)
-            # Wait up to 5s for flock release.
-            deadline = time.time() + 5
-            while time.time() < deadline:
-                still = probe_held(lock_path)
-                if still is not True:
-                    break
-                time.sleep(0.1)
-            else:
-                kill_pid(pid, signal.SIGKILL)
-                time.sleep(0.2)
+        _stop_recorder(info)
     shutil.rmtree(info.path, ignore_errors=True)
 
 
 LLMS_TXT_PAYLOAD = """\
 This project uses `live`, a CLI streamer.
 See live-cmd skill for detailed usage.
+
+Run detached (survives shell exit; prints session UUID):
+  live run -d [-n NAME] -- <cmd>
+
+Stop a running session:
+  live stop <SELECTOR>
 
 List sessions:
   live ls [-a] [--json] [<SELECTOR>]

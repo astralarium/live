@@ -7,6 +7,7 @@
 - [`live head`](#live-head)
 - [`live tail`](#live-tail)
 - [`live less`](#live-less)
+- [`live stop`](#live-stop)
 - [`live rm`](#live-rm)
 - [`live completion`](#live-completion)
 - [`live update-shell`](#live-updateshell)
@@ -27,6 +28,7 @@ positional arguments:
     head          Head session.
     tail          Tail session.
     less          Page session.
+    stop          Stop running sessions.
     rm            Delete sessions.
     completion    Print shell completion script.
     update-shell  Install shell completions.
@@ -40,16 +42,18 @@ options:
 ## `live run`
 
 ```
-usage: live run [-h] [-n NAME] cmd ...
+usage: live run [-h] [-n NAME] [-d] [--geometry COLSxROWS] cmd ...
 
 Run a command under a PTY and record its output.
 
 positional arguments:
-  cmd              Command to run; `--` wraps subsequent arguments.
+  cmd                   Command to run; `--` wraps subsequent arguments.
 
 options:
-  -h, --help       show this help message and exit
-  -n, --name NAME  Session name.
+  -h, --help            show this help message and exit
+  -n, --name NAME       Session name (letters, digits, '.', '_', '-').
+  -d, --detach          Detach: run in the background, print session id.
+  --geometry COLSxROWS  PTY size (default: the terminal's size, else 80x24).
 ```
 
 ## `live ls`
@@ -147,6 +151,22 @@ options:
   --raw         Keep ANSI.
 ```
 
+## `live stop`
+
+```
+usage: live stop [-h] [-g] [--all] [selectors ...]
+
+Stop running sessions.
+
+positional arguments:
+  selectors     NAME(s) or UUID-prefix(es).
+
+options:
+  -h, --help    show this help message and exit
+  -g, --global  Global scope.
+  --all         Stop all running sessions.
+```
+
 ## `live rm`
 
 ```
@@ -211,6 +231,12 @@ options:
 ```
 This project uses `live`, a CLI streamer.
 See live-cmd skill for detailed usage.
+
+Run detached (survives shell exit; prints session UUID):
+  live run -d [-n NAME] -- <cmd>
+
+Stop a running session:
+  live stop <SELECTOR>
 
 List sessions:
   live ls [-a] [--json] [<SELECTOR>]

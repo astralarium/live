@@ -5,8 +5,8 @@ completion (NAME or UUID via `live ls --json`), and `live run <TAB>` handoff
 to the wrapped command's completion. The selector helper mirrors the verb's
 scope flags: `ls` only suggests active sessions unless `-a` was typed; the
 read verbs (`cat`/`head`/`tail`/`less`/`rm`) always pass `-a` since exited
-sessions remain valid targets. `-g` is honored when present in the command
-line.
+sessions remain valid targets; `stop` only suggests active sessions. `-g` is
+honored when present in the command line.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ _live_complete() {
         if [[ "$cur" == -* ]]; then
             COMPREPLY=( $(compgen -W "--version" -- "$cur") )
         else
-            COMPREPLY=( $(compgen -W "run ls cat head tail less rm llms.txt completion update-shell" -- "$cur") )
+            COMPREPLY=( $(compgen -W "run ls cat head tail less stop rm llms.txt completion update-shell" -- "$cur") )
         fi
         return
     fi
@@ -47,7 +47,7 @@ _live_complete() {
             for ((i=verb_idx+1; i<cword; i++)); do
                 case "${words[i]}" in
                     --) seen_cmd=$((i+1)); break ;;
-                    -n|--name) i=$((i+1)) ;;
+                    -n|--name|--geometry) i=$((i+1)) ;;
                     -*) ;;
                     *) seen_cmd=$i; break ;;
                 esac
@@ -56,7 +56,7 @@ _live_complete() {
                 _command_offset $seen_cmd
                 return
             fi
-            COMPREPLY=( $(compgen -W "-n --name --" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-n --name -d --detach --geometry --" -- "$cur") )
             ;;
         ls)
             if [[ "$cur" == -* ]]; then
@@ -91,6 +91,13 @@ _live_complete() {
                 COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global --strip-ansi --raw -n --lines -c --bytes -t --time" -- "$cur") )
             else
                 COMPREPLY=( $(compgen -W "$(_live_selectors -a $(_live_global_flag))" -- "$cur") )
+            fi
+            ;;
+        stop)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "-g --global --all" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "$(_live_selectors $(_live_global_flag))" -- "$cur") )
             fi
             ;;
         rm)
@@ -150,6 +157,8 @@ _live() {
                     # word triggers `_normal` against the wrapped command.
                     _arguments -S \
                         {-n+,--name=}'[session name]:name:' \
+                        '(-d --detach)'{-d,--detach}'[detach; print session id]' \
+                        '--geometry=[PTY size]:COLSxROWS:' \
                         '*::command:_normal'
                     ;;
                 ls)
@@ -197,6 +206,12 @@ _live() {
                         '(-t --time)'{-t+,--time=}':epoch-seconds:' \
                         '1:selector:_live_selectors'
                     ;;
+                stop)
+                    _arguments \
+                        '(-g --global)'{-g,--global} \
+                        '--all' \
+                        '*:selector:_live_selectors'
+                    ;;
                 rm)
                     _arguments \
                         '(-f --force)'{-f,--force} \
@@ -224,6 +239,7 @@ _live_verbs() {
         'head:Head session.'
         'tail:Tail session.'
         'less:Page session.'
+        'stop:Stop running sessions.'
         'rm:Delete sessions.'
         'llms.txt:Print agent instructions.'
         'completion:Print shell completion script.'
@@ -233,8 +249,9 @@ _live_verbs() {
 }
 
 # Selector completion. For `live ls`, only suggest active sessions unless -a
-# was typed; for other verbs, always include exited (still valid targets).
-# Honors -g/--global when present in the command line.
+# was typed; `stop` only suggests active sessions; other verbs always include
+# exited (still valid targets). Honors -g/--global when present in the
+# command line.
 _live_selectors() {
     local -a sel_args names
     local w want_all=0 want_global=0
@@ -244,9 +261,11 @@ _live_selectors() {
             -g|--global) want_global=1 ;;
         esac
     done
-    if [[ $words[1] != ls ]] || (( want_all )); then
-        sel_args+=(-a)
-    fi
+    case $words[1] in
+        stop) ;;
+        ls) (( want_all )) && sel_args+=(-a) ;;
+        *) sel_args+=(-a) ;;
+    esac
     (( want_global )) && sel_args+=(-g)
     names=( ${(f)"$(live ls $sel_args --json 2>/dev/null | awk -F'"' '{ for (i=1;i<=NF;i++) if ($i=="id"||$i=="name") print $(i+2) }' | sort -u)"} )
     (( $#names )) && _values 'selector' "${names[@]}"
@@ -262,7 +281,9 @@ function __live_selectors
     set -l toks (commandline -opc)
     set -l verb $toks[2]
     set -l args
-    if test "$verb" != "ls"; or contains -- -a $toks; or contains -- --all $toks
+    if test "$verb" = "stop"
+        # active sessions only
+    else if test "$verb" != "ls"; or contains -- -a $toks; or contains -- --all $toks
         set -a args -a
     end
     if contains -- -g $toks; or contains -- --global $toks
@@ -271,7 +292,7 @@ function __live_selectors
     live ls $args --json 2>/dev/null | string match -rga '"(?:id|name)":"([^"]+)"' | sort -u
 end
 
-set -l verbs run ls cat head tail less rm llms.txt completion update-shell
+set -l verbs run ls cat head tail less stop rm llms.txt completion update-shell
 
 complete -c live -f
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a run -d 'Run <cmd> under a PTY; record.'
@@ -280,14 +301,15 @@ complete -c live -n "not __fish_seen_subcommand_from $verbs" -a cat -d 'Concaten
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a head -d 'Head session.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a tail -d 'Tail session.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a less -d 'Page session.'
+complete -c live -n "not __fish_seen_subcommand_from $verbs" -a stop -d 'Stop running sessions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a rm -d 'Delete sessions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a llms.txt -d 'Print agent instructions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a completion -d 'Print shell completion script.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -a update-shell -d 'Install shell completions.'
 complete -c live -n "not __fish_seen_subcommand_from $verbs" -l version -d 'Show version and exit.'
 
-# Selector completion for ls / cat / head / tail / less / rm.
-complete -c live -n "__fish_seen_subcommand_from ls cat head tail less rm" -a "(__live_selectors)"
+# Selector completion for ls / cat / head / tail / less / stop / rm.
+complete -c live -n "__fish_seen_subcommand_from ls cat head tail less stop rm" -a "(__live_selectors)"
 
 # ls
 complete -c live -n "__fish_seen_subcommand_from ls" -s a -l all -d 'Include exited.'
@@ -324,6 +346,10 @@ complete -c live -n "__fish_seen_subcommand_from tail" -s n -l lines -r -d 'Last
 complete -c live -n "__fish_seen_subcommand_from tail" -s c -l bytes -r -d 'Last K bytes; +K for bytes after offset K.'
 complete -c live -n "__fish_seen_subcommand_from tail" -s t -l time -r -d 'Lines with idx t > T (epoch).'
 
+# stop
+complete -c live -n "__fish_seen_subcommand_from stop" -s g -l global -d 'Global scope.'
+complete -c live -n "__fish_seen_subcommand_from stop" -l all -d 'Stop all running sessions.'
+
 # rm
 complete -c live -n "__fish_seen_subcommand_from rm" -s f -l force -d 'SIGTERM live runs; ignore missing.'
 complete -c live -n "__fish_seen_subcommand_from rm" -s g -l global -d 'Global scope.'
@@ -334,6 +360,8 @@ complete -c live -n "__fish_seen_subcommand_from rm" -l older-than -r -d 'Delete
 
 # run -- hand off after first non-flag token.
 complete -c live -n "__fish_seen_subcommand_from run" -s n -l name -r -d 'Session name.'
+complete -c live -n "__fish_seen_subcommand_from run" -s d -l detach -d 'Detach; print session id.'
+complete -c live -n "__fish_seen_subcommand_from run" -l geometry -r -d 'PTY size as COLSxROWS.'
 complete -c live -n "__fish_seen_subcommand_from run; and __fish_complete_subcommand --skip 2" \
     -a "(__fish_complete_subcommand --skip 2)"
 
