@@ -5,32 +5,32 @@ description: Run long-lived commands (dev servers, builds, watchers) under `live
 
 # live-cmd
 
-`live` records command output to disk so it can be read with POSIX-style
-verbs (`cat`, `head`, `tail`, `less`). It is built for agents: every read can
-emit a resume cursor, so you never re-read old output and never miss new
-output. No daemons; state lives in `~/.live`.
+`live` records command output to disk so it can be read with
+POSIX-style verbs (`cat`, `head`, `tail`, `less`).
+It is built for agents: verbose reads emit a resume cursor,
+so you never re-read old output and never miss new output.
+No daemons; state lives in `~/.live`.
 
 ## Record a command
 
 ```bash
-live run -n server npm start        # run under a PTY, record output
-live run -n build -- make -j8       # use `--` if the command has flags
-live run -d -n server npm start     # detach: return immediately, print UUID
+live run -n server npm start   # run under a PTY, record output
+live run -dn server npm start  # detach: return immediately, print UUID
 ```
 
-The command's stdout and stderr are merged into one log. Large logs
-auto-rotate (oldest segments dropped past the cap).
+The command's stdout and stderr are merged into one log.
+Large logs auto-rotate the older segments when they reach the cap.
 
-With `-d` the process survives shell exit; read its output later with
-`cat`/`tail` and end it with `live stop`.
+With `live run -d` the process survives shell exit.
+Read output later with `cat`/`tail`. End it with `live stop`.
 
 ## Find sessions
 
 ```bash
-live ls             # active sessions in the current directory tree
-live ls -a          # include exited sessions
-live ls -ag         # all sessions, global scope
-live ls --json      # NDJSON, one session per line
+live ls         # active sessions in the current directory tree
+live ls -a      # include exited sessions
+live ls -ag     # all sessions, global scope
+live ls --json  # NDJSON, one session per line
 ```
 
 Select sessions by NAME (newest match) or UUID prefix. All verbs scope to
@@ -40,20 +40,30 @@ global scope.
 ## Read output
 
 ```bash
-live cat -v server      # full log
-live head -v -n 50 server
-live tail -v -n 50 server
-live tail -f server     # follow until exit
+live cat -v server
+live head -vn 50 server  # first 50 lines
+live tail -vn 50 server  # last 50 lines
+live tail -f server      # follow until exit
+live head -t 1m          # lines at or before epoch T or (now - interval)
+live tail -t 1m          # lines after epoch T or (now - interval)
 ```
 
 With `-v`, log content goes to stdout and `live` metadata goes to stderr:
 
-- trailer: `live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>`
-- stop: `live: exit-code=<code>` or `live: exit=inconsistent`
-- hung: `live: status=hung last-activity=<s>` (alive, but stalled)
-- gap (lines): `live: dropped <k> lines (from-line=<N>, first-line=<F>)`
-- gap (bytes): `live: dropped <k> bytes (from-byte=<B>, first-byte=<F>)`
-- partial: `live: partial-line bytes=<k> age=<s>`
+- trailer: printed with every verbose command
+  `live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>`
+- stop: session is done
+  `live: exit-code=<code>`
+  or
+  `live: exit=inconsistent`
+- hung: alive, but stalled
+  `live: status=hung last-activity=<s>`
+- gap: rotation dropped output
+  `live: dropped <k> lines (from-line=<N>, first-line=<F>)`
+  or
+  `live: dropped <k> bytes (from-byte=<B>, first-byte=<F>)`
+- partial: partial line (eg. progress bars)
+  `live: partial-line bytes=<k> age=<s>`
 
 ANSI codes are stripped when stdout is not a TTY; force with `--strip-ansi`
 or `--raw`.
@@ -63,27 +73,22 @@ or `--raw`.
 Save `next-line` (or `next-byte`) from the trailer, then poll for new data:
 
 ```bash
-live tail -vn +42 server    # lines from line 42 onward
-live tail -vc +250 server   # bytes from offset 250 onward
+live tail -vn +42 server   # lines from line 42 onward
+live tail -vc +250 server  # bytes from offset 250 onward
 ```
 
-Each call prints a fresh trailer; feed `next-line`/`next-byte` into the next
-poll. If the trailer's `id` changes, the name now points at a new session —
-reset the cursor to 0. A `dropped` line means rotation outran the cursor;
-continue from `first-line`/`first-byte`.
-
-A session is done when stderr shows `exit-code=`. Time-based reads are also
-available: `head -t <T>` (lines at or before epoch T), `tail -t <T>` (after T).
+Each call prints trailer data; feed `next-line`/`next-byte` into the next poll.
+If trailer `id` changes, the name now points at a new session — reset cursor to 0.
 
 ## Stop and clean up
 
 ```bash
-live stop server                 # SIGTERM a running session
-live stop --all                  # stop everything running in scope
-live rm server                   # remove a session
-live rm -f server                # SIGTERM a live run first
-live rm --exited --older-than 1d
+live stop server                  # SIGTERM a running session
+live stop --all                   # stop everything running in scope
+live rm server                    # remove a session
+live rm -f server                 # stop and remove a session
+live rm --exited --older-than 1d  # remove exited sessions with last activity > 1 day ago
 ```
 
-Old sessions are also cleaned opportunistically (default TTL 7 days,
-configurable in `~/.live/config.json`).
+Old sessions are cleaned opportunistically
+(default TTL 7 days, configurable in `~/.live/config.json`).

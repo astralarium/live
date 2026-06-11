@@ -566,7 +566,7 @@ This project uses `live`, a CLI streamer.
 See live-cmd skill for detailed usage.
 
 Run detached (survives shell exit; prints session UUID):
-  live run -d [-n NAME] -- <cmd>
+  live run -dn NAME -- <cmd>
 
 Stop a running session:
   live stop <SELECTOR>
