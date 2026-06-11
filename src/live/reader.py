@@ -1,9 +1,8 @@
-"""Reader helpers: segment scanning, line ranges, partial-line tail, ANSI strip."""
+"""Reader helpers: segment scanning, line ranges, partial-line tail."""
 
 from __future__ import annotations
 
 import os
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,25 +17,6 @@ from .format import (
     segment_tip_byte,
     stream_name,
 )
-
-# ECMA-48 / VT100 escape sequences.
-_ANSI_RE = re.compile(
-    rb"""
-    \x1B
-    (?:
-        \[ [0-?]* [ -/]* [@-~]    # CSI
-      | \] [^\x07]*? (?:\x07|\x1B\\)  # OSC ... BEL or ESC \\
-      | [@-_]                     # 2-byte (Fp, Fe, Fs)
-    )
-    """,
-    re.VERBOSE,
-)
-
-
-def strip_ansi(data: bytes) -> bytes:
-    """Remove ANSI/VT escape sequences from byte stream."""
-    return _ANSI_RE.sub(b"", data)
-
 
 def should_strip_ansi(
     *,

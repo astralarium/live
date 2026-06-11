@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from .ansi import strip_ansi
 from .config import Config, load_config
 from .lock import HeldLock, kill_pid, probe_held, read_lock_pid
 from .reader import (
@@ -23,7 +24,6 @@ from .reader import (
     lines_since_time,
     lines_until_time,
     should_strip_ansi,
-    strip_ansi,
     tail_last,
 )
 from .paths import name_lock_path, within_cwd

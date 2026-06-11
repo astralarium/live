@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import time
 from pathlib import Path
 
@@ -18,22 +19,37 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
 ) -> None:
     # Configure heartbeat to 1s so the hung threshold is 3s.
     _write_config(project, heartbeatSec=1)
-    spawn_run("-n", "longrun")
+    proc = spawn_run("-n", "longrun")
     sess_dir = wait_for_session()
     idx = sess_dir / "lines.0000.idx"
     assert wait_for(lambda: idx.exists() and idx.stat().st_size > 0,
                     timeout=8.0), "no indexed line ever appeared"
-    # Backdate the active idx by 10s -> well past 3 * heartbeatSec.
-    past = time.time() - 10
-    os.utime(idx, (past, past))
+    # Freeze the recorder so no heartbeat or trailing startup write can
+    # re-touch the idx after the backdate. A stopped process still holds the
+    # lock, which is exactly the "hung" shape: alive but silent.
+    os.kill(proc.pid, signal.SIGSTOP)
+    try:
+        # Backdate the active idx by 10s -> well past 3 * heartbeatSec.
+        # SIGSTOP delivery is asynchronous, so a write already in flight can
+        # land just after the first utime; re-apply until it sticks.
+        past = time.time() - 10
 
-    ls = run_live(project, "ls", "--json")
-    info = json.loads(ls.stdout.strip().splitlines()[0])
-    assert info["status"] == "hung"
+        def _backdate() -> bool:
+            os.utime(idx, (past, past))
+            return idx.stat().st_mtime < past + 1
 
-    # tail -v should also surface "status=hung last-activity=<s>".
-    tail = run_live(project, "tail", "-vn", "+0", "longrun")
-    assert "status=hung last-activity=" in tail.stderr
+        assert wait_for(_backdate, timeout=5.0), "idx mtime kept advancing"
+
+        ls = run_live(project, "ls", "--json")
+        info = json.loads(ls.stdout.strip().splitlines()[0])
+        assert info["status"] == "hung"
+
+        # tail -v should also surface "status=hung last-activity=<s>".
+        tail = run_live(project, "tail", "-vn", "+0", "longrun")
+        assert "status=hung last-activity=" in tail.stderr
+    finally:
+        # Resume so fixture teardown can SIGTERM it normally.
+        os.kill(proc.pid, signal.SIGCONT)
 
 
 def test_heartbeat_advances_idx_mtime_while_silent(

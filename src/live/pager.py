@@ -16,9 +16,18 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .ansi import (
+    DEFAULT_STYLE,
+    Style,
+    parse_spans,
+    strip_ansi,
+    strip_ansi_str,
+    to_base16,
+)
 from .config import Config
 from .format import LOCK_NAME, idx_name, list_segments, read_idx_records
 from .lock import probe_held
@@ -27,7 +36,6 @@ from .reader import (
     lines_in_segment,
     segment_refs,
     stream_segment_bytes,
-    strip_ansi,
 )
 from .session import SessionInfo, session_info
 from .watcher import new_watcher
@@ -119,6 +127,45 @@ def load_lines(session_dir: Path) -> list[Line]:
     return _scan_from(session_dir, _ScanCursor())
 
 
+# ----- display text -----
+
+
+def _display_text(line: Line) -> str:
+    """Decoded display text of a line: escapes intact, line ending trimmed.
+
+    Single decode point for rendering, styling, and search, so they always
+    see identical text (decode order matters around invalid UTF-8).
+    """
+    return line.text.decode("utf-8", errors="replace").rstrip("\r\n")
+
+
+def _cell_width(ch: str) -> int:
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in "WF" else 1
+
+
+def _cells(text: str) -> int:
+    """Display width of `text` in terminal cells."""
+    if text.isascii():
+        return len(text)
+    return sum(_cell_width(ch) for ch in text)
+
+
+def _clip_cells(text: str, budget: int) -> tuple[str, int]:
+    """Longest prefix of `text` that fits in `budget` cells, and its width."""
+    if text.isascii():
+        clipped = text[: max(0, budget)]
+        return clipped, len(clipped)
+    cells = 0
+    for idx, ch in enumerate(text):
+        cw = _cell_width(ch)
+        if cells + cw > budget:
+            return text[:idx], cells
+        cells += cw
+    return text, cells
+
+
 # ----- pure view state -----
 
 
@@ -147,6 +194,10 @@ class PagerState:
     prompt_buffer: str = ""
     help_active: bool = False
     help_view_top: int = 0  # scroll position within the help overlay
+    # visible_matches() memo: ((pattern, view_top, view_height, len(lines)), spans)
+    _match_cache: tuple[tuple[str, int, int, int], list[tuple[int, int, int]]] | None = (
+        field(default=None, repr=False)
+    )
 
     def __post_init__(self) -> None:
         # On load, everything already in the buffer counts as "seen" — the
@@ -390,21 +441,30 @@ class PagerState:
         """
         if not self.search_pattern:
             return []
+        # The render loop calls this every frame; inputs only change on
+        # search, scroll, resize, or new lines.
+        key = (self.search_pattern, self.view_top, self.view_height, len(self.lines))
+        if self._match_cache is not None and self._match_cache[0] == key:
+            return self._match_cache[1]
         regex = self._compile(self.search_pattern, silent=True)
         if regex is None:
             return []
         out: list[tuple[int, int, int]] = []
         for row, line in enumerate(self.visible()):
-            text = self._decode(line).rstrip("\r\n")
+            text = self._decode(line)
             for m in regex.finditer(text):
                 if m.end() == m.start():
                     continue  # zero-width match; nothing to paint
                 out.append((row, m.start(), m.end()))
+        self._match_cache = (key, out)
         return out
 
     @staticmethod
     def _decode(line: Line) -> str:
-        return line.text.decode("utf-8", errors="replace")
+        # Search runs against display text: decode first, then drop escapes,
+        # mirroring the render pipeline (`parse_spans` chunks) exactly so
+        # match columns align with what is painted.
+        return strip_ansi_str(_display_text(line))
 
     # ----- derived state -----
 
@@ -729,6 +789,127 @@ def _render_help(stdscr, w: int, content_rows: int, top: int) -> None:
 # ----- curses I/O -----
 
 
+class _AttrMap:
+    """Translates a `Style` into a curses attribute.
+
+    Color pairs are allocated lazily per (fg, bg) combo and capped by
+    COLOR_PAIRS; combos past the cap render with text attributes only.
+    Palette indices beyond the terminal's COLORS are approximated down;
+    bright foregrounds folded onto an 8-color terminal keep their
+    brightness as A_BOLD, whichever SGR syntax produced them.
+    """
+
+    def __init__(self) -> None:
+        self._pairs: dict[tuple[int, int], int] = {}
+        self._next_pair = 1
+        self._attrs: dict[Style, int] = {}
+
+    def attr(self, style: Style) -> int:
+        cached = self._attrs.get(style)
+        if cached is None:
+            cached = self._attrs[style] = self._compute(style)
+        return cached
+
+    def _compute(self, style: Style) -> int:
+        a = 0
+        if style.bold:
+            a |= curses.A_BOLD
+        if style.dim:
+            a |= curses.A_DIM
+        if style.italic:
+            a |= getattr(curses, "A_ITALIC", 0)
+        if style.underline:
+            a |= curses.A_UNDERLINE
+        if style.blink:
+            a |= curses.A_BLINK
+        if style.reverse:
+            a |= curses.A_REVERSE
+        if not curses.has_colors():
+            return a
+        fg, fg_folded = self._fit(style.fg)
+        bg, _ = self._fit(style.bg)
+        if fg_folded:
+            # Bold has no effect on the background, so only fg degrades this way.
+            a |= curses.A_BOLD
+        if (fg, bg) != (-1, -1):
+            a |= curses.color_pair(self._pair(fg, bg))
+        return a
+
+    @staticmethod
+    def _fit(c: int) -> tuple[int, bool]:
+        """Nearest supported color index, plus whether a bright color was
+        folded to its dim base (callers compensate with A_BOLD)."""
+        if c < 0:
+            return -1, False
+        if c < curses.COLORS:
+            return c, False
+        c16 = c if c < 16 else to_base16(c)
+        if c16 < curses.COLORS:
+            return c16, False
+        if curses.COLORS >= 8:
+            return c16 % 8, c16 >= 8
+        return -1, False
+
+    def _pair(self, fg: int, bg: int) -> int:
+        key = (fg, bg)
+        cached = self._pairs.get(key)
+        if cached is not None:
+            return cached
+        pair = self._next_pair
+        if pair >= curses.COLOR_PAIRS:
+            self._pairs[key] = 0
+            return 0
+        try:
+            curses.init_pair(pair, fg, bg)
+        except curses.error:
+            self._pairs[key] = 0
+            return 0
+        self._next_pair += 1
+        self._pairs[key] = pair
+        return pair
+
+
+class _LineStyleCache:
+    """Start-of-line styles and parsed spans for the (append-only) buffer.
+
+    SGR state persists across newlines in terminal output, so a color opened
+    on one line affects every following line until reset. Start styles are
+    computed once per line and extended incrementally as new lines arrive;
+    spans are memoized per line so an idle render loop repaints from cache.
+    """
+
+    _SPANS_MAX = 4096  # bounds memory when scrubbing through huge buffers
+
+    def __init__(self) -> None:
+        self._starts: list[Style] = []
+        self._end = DEFAULT_STYLE
+        self._spans: dict[int, list[tuple[str, Style]]] = {}
+
+    def start_style(self, lines: list[Line], i: int) -> Style:
+        while len(self._starts) <= i:
+            j = len(self._starts)
+            self._starts.append(self._end)
+            # A line with no escape bytes cannot change SGR state, so the
+            # catch-up scan after a deep jump only parses styled lines.
+            if b"\x1b" in lines[j].text:
+                _, self._end = parse_spans(_display_text(lines[j]), self._end)
+        return self._starts[i]
+
+    def spans(
+        self, lines: list[Line], i: int, *, styled: bool = True
+    ) -> list[tuple[str, Style]]:
+        """Parsed spans of line `i`. `styled=False` skips carry-over styling
+        (the chunks are identical either way)."""
+        cached = self._spans.get(i)
+        if cached is None:
+            start = self.start_style(lines, i) if styled else DEFAULT_STYLE
+            cached, _ = parse_spans(_display_text(lines[i]), start)
+            if len(self._spans) >= self._SPANS_MAX:
+                self._spans.clear()
+            self._spans[i] = cached
+        return cached
+
+
 def run_pager(info: SessionInfo, cfg: Config, *, strip: bool) -> int:
     """Open the pager on `info`. Falls back to cat when stdout isn't a TTY."""
     if not sys.stdout.isatty():
@@ -792,12 +973,17 @@ def _curses_loop(
         pass
 
     count_buffer = ""
+    attrs = _AttrMap()
+    styles = _LineStyleCache()
 
     while True:
         h, _w = stdscr.getmaxyx()
         state.resize(max(1, h - 1))
         _drain_source(source, state)
-        _render(stdscr, state, info, strip=strip, count_buffer=count_buffer)
+        _render(
+            stdscr, state, info,
+            strip=strip, count_buffer=count_buffer, attrs=attrs, styles=styles,
+        )
 
         ch = stdscr.getch()
         if ch == -1:  # timeout
@@ -922,12 +1108,22 @@ def _drain_source(source: PagerSource, state: PagerState) -> None:
         state.feed_lines(new_lines)
 
 
+def _safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
+    # Writes touching the bottom-right cell raise after painting; ignore.
+    try:
+        stdscr.addstr(y, x, s, attr)
+    except curses.error:
+        pass
+
+
 def _render(
     stdscr,
     state: PagerState,
     info: SessionInfo,
     *,
     strip: bool,
+    attrs: _AttrMap,
+    styles: _LineStyleCache,
     count_buffer: str = "",
 ) -> None:
     stdscr.erase()
@@ -949,32 +1145,41 @@ def _render(
         return
 
     visible = state.visible()[:content_rows]
+    color = not strip
     for i in range(content_rows):
-        if i < len(visible):
-            text = visible[i].text
-            if strip:
-                text = strip_ansi(text)
-            s = text.rstrip(b"\r\n").decode("utf-8", errors="replace")
-            s = s[: max(0, w - 1)]
-        else:
+        if i >= len(visible):
             # Past-end placeholder, matches less/vim.
-            s = "~"
-        try:
-            stdscr.addstr(i, 0, s)
-        except curses.error:
-            pass
+            _safe_addstr(stdscr, i, 0, "~")
+            continue
+        col = 0  # in cells: wide chars occupy two, so len(chunk) won't do
+        for chunk, style in styles.spans(
+            state.lines, state.view_top + i, styled=color
+        ):
+            if col >= w - 1:
+                break
+            chunk, cells = _clip_cells(chunk, w - 1 - col)
+            _safe_addstr(stdscr, i, col, chunk, attrs.attr(style) if color else 0)
+            col += cells
 
     # Highlight visible search matches (after content is painted so chgat
-    # overlays them in place).
+    # overlays them in place). Match columns are character offsets into the
+    # display text; convert to cells to land on the painted glyphs.
     if state.search_pattern:
         for row, c0, c1 in state.visible_matches():
             if row >= content_rows:
                 continue
-            n = min(c1, w - 1) - c0
+            text = "".join(
+                chunk
+                for chunk, _ in styles.spans(
+                    state.lines, state.view_top + row, styled=color
+                )
+            )
+            start = _cells(text[:c0])
+            n = min(_cells(text[c0:c1]), max(0, w - 1 - start))
             if n <= 0:
                 continue
             try:
-                stdscr.chgat(row, c0, n, curses.A_REVERSE)
+                stdscr.chgat(row, start, n, curses.A_REVERSE)
             except curses.error:
                 pass
 

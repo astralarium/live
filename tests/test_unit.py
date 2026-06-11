@@ -13,7 +13,6 @@ from live.reader import (
     lines_in_segment,
     partial_tail_bytes,
     should_strip_ansi,
-    strip_ansi,
 )
 from live.session import (
     NoSuchSelectorError,
@@ -23,29 +22,6 @@ from live.session import (
     resolve_one,
 )
 from live.watcher import _PollWatcher
-
-
-# ----- ANSI strip -----
-
-
-def test_strip_ansi_csi_color_codes() -> None:
-    raw = b"\x1b[31mred\x1b[0m\n\x1b[1;32mbold-green\x1b[0m\n"
-    assert strip_ansi(raw) == b"red\nbold-green\n"
-
-
-def test_strip_ansi_osc_window_title() -> None:
-    raw = b"\x1b]0;my title\x07after\n"
-    assert strip_ansi(raw) == b"after\n"
-
-
-def test_strip_ansi_two_byte_escape() -> None:
-    # ESC D (Index, 0x1B 0x44) is a 2-byte Fe escape in the @-_ range.
-    raw = b"before\x1bDafter\n"
-    assert strip_ansi(raw) == b"beforeafter\n"
-
-
-def test_strip_ansi_passthrough_for_clean_text() -> None:
-    assert strip_ansi(b"plain text\n") == b"plain text\n"
 
 
 # ----- should_strip_ansi resolution -----

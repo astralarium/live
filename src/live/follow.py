@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from .ansi import strip_ansi
 from .config import Config
 from .format import (
     LOCK_NAME,
@@ -22,7 +23,6 @@ from .reader import (
     lines_in_segment,
     partial_tail_bytes,
     stream_segment_bytes,
-    strip_ansi,
 )
 from .session import SessionInfo, session_info
 from .verbose import emit_exit, emit_hung, emit_trailer
