@@ -318,6 +318,54 @@ def test_bash_cwd_flag_completes_session_cwds(
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_cwd_completion_prefers_session_cwds(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """While a session cwd matches the typed prefix, generic directory
+    completion is suppressed; it kicks in only as a fallback."""
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    local = tmp_path / "localdir"
+    proj.mkdir()
+    local.mkdir()
+    run_live(proj, "run", "-n", "scoped", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
+
+    # Empty prefix: session cwds only, no local-dir noise.
+    offered = _drive_bash(
+        payload, ("live", "ls", "-C", ""), cword=3, env=test_env, cwd=tmp_path
+    )
+    assert str(proj.resolve()) in offered, offered
+    assert "localdir" not in offered, offered
+
+    # Prefix matching no session cwd: plain directory completion.
+    fallback = _drive_bash(
+        payload, ("live", "ls", "-C", "local"), cword=3, env=test_env, cwd=tmp_path
+    )
+    assert "localdir" in fallback, fallback
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_cwd_completion_prefers_session_cwds(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    local = tmp_path / "localdir"
+    proj.mkdir()
+    local.mkdir()
+    run_live(proj, "run", "-n", "scoped", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "fish")
+
+    offered = _drive_fish(payload, "live ls -C ", env=test_env, cwd=tmp_path)
+    assert str(proj.resolve()) in offered, offered
+    assert not any(c.rstrip("/") == "localdir" for c in offered), offered
+
+    fallback = _drive_fish(payload, "live ls -C local", env=test_env, cwd=tmp_path)
+    assert any("localdir" in c for c in fallback), fallback
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
 def test_bash_cwd_with_spaces_completes_and_scopes(
     run_live, live_shim, tmp_path: Path
 ) -> None:

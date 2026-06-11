@@ -9,7 +9,9 @@ verb's scope flags: `ls` only suggests active sessions unless `-a` was typed;
 the read verbs (`cat`/`head`/`tail`/`less`/`rm`) always pass `-a` since exited
 sessions remain valid targets; `stop` only suggests active sessions. `-g`
 and `-C <dir>` are honored when present in the command line. `-C` values
-complete from the cwds of recorded sessions, plus plain directories.
+complete from the cwds of recorded sessions; plain directory completion is
+the fallback when no recorded cwd matches the typed prefix, so the session
+dirs aren't drowned out (and keep a useful common prefix).
 """
 
 from __future__ import annotations
@@ -178,12 +180,15 @@ _live_complete_selectors() {
     _live_reply_lines < <(live completion selectors "${sel_args[@]}" 2>/dev/null)
 }
 
-# `-C` value completion: cwds of recorded sessions, plus plain directories.
+# `-C` value completion: cwds of recorded sessions; plain directories only
+# when no recorded cwd matches the typed prefix.
 _live_complete_cwd() {
     COMPREPLY=()
     _live_reply_lines < <(live completion cwds 2>/dev/null)
-    local IFS=$'\n'
-    COMPREPLY+=( $(compgen -d -- "$cur") )
+    if [ ${#COMPREPLY[@]} -eq 0 ]; then
+        local IFS=$'\n'
+        COMPREPLY=( $(compgen -d -- "$cur") )
+    fi
     type compopt >/dev/null 2>&1 && compopt -o filenames
     return 0
 }
@@ -341,11 +346,13 @@ _live_selectors() {
     (( $#names )) && _values 'selector' "${names[@]}"
 }
 
-# `-C` value completion: cwds of recorded sessions, plus plain directories.
+# `-C` value completion: cwds of recorded sessions; plain directories only
+# when no recorded cwd matches the typed prefix (compadd fails when nothing
+# it added matched).
 _live_cwds() {
     local -a cwds
     cwds=( ${(f)"$(live completion cwds 2>/dev/null)"} )
-    (( $#cwds )) && compadd -- "${cwds[@]}"
+    (( $#cwds )) && compadd -- "${cwds[@]}" && return
     _files -/
 }
 
@@ -379,10 +386,16 @@ function __live_selectors
     live completion selectors $args 2>/dev/null
 end
 
-# `-C` value completion: cwds of recorded sessions, plus plain directories.
+# `-C` value completion: cwds of recorded sessions; plain directories only
+# when no recorded cwd matches the typed prefix.
 function __live_cwds
-    live completion cwds 2>/dev/null
-    __fish_complete_directories
+    set -l cur (commandline -ct)
+    set -l hits (live completion cwds 2>/dev/null | string match -- "$cur*")
+    if set -q hits[1]
+        printf '%s\n' $hits
+    else
+        __fish_complete_directories
+    end
 end
 
 # True while the cursor is still on `run`'s own flags — before the wrapped
