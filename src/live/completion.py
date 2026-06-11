@@ -256,7 +256,7 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
-                        '(-t --time)'{-t+,--time=}':epoch-seconds:' \
+                        '(-t --time)'{-t+,--time=}':time (epoch, duration, or ISO):' \
                         '1:selector:_live_selectors'
                     ;;
                 tail)
@@ -269,7 +269,7 @@ _live() {
                         '(--strip-ansi --raw)--raw' \
                         '(-n --lines)'{-n+,--lines=}':lines:' \
                         '(-c --bytes)'{-c+,--bytes=}':bytes:' \
-                        '(-t --time)'{-t+,--time=}':epoch-seconds:' \
+                        '(-t --time)'{-t+,--time=}':time (epoch, duration, or ISO):' \
                         '1:selector:_live_selectors'
                     ;;
                 stop)

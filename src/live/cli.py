@@ -47,6 +47,16 @@ def _parse_cwd(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
+def _duration_secs(value: str) -> float | None:
+    """`7d`/`12h`/`30m`/`60s` -> seconds; None if not a duration."""
+    m = _AGE_RE.match(value)
+    if m is None:
+        return None
+    n = float(m.group(1))
+    unit = {"d": 86400, "h": 3600, "m": 60, "s": 1}[m.group(2)]
+    return n * unit
+
+
 def _parse_age(value: str) -> float:
     """Return a cutoff in epoch seconds. Sessions exited before it count as older.
 
@@ -54,16 +64,37 @@ def _parse_age(value: str) -> float:
     Absolute form: ISO date/datetime (`2026-01-01`, `2026-01-01T12:00:00`); naive
     timestamps are interpreted as local time.
     """
-    m = _AGE_RE.match(value)
-    if m:
-        n = float(m.group(1))
-        unit = {"d": 86400, "h": 3600, "m": 60, "s": 1}[m.group(2)]
-        return time.time() - n * unit
+    secs = _duration_secs(value)
+    if secs is not None:
+        return time.time() - secs
     try:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
         raise argparse.ArgumentTypeError(
             f"expected duration (e.g. 7d, 12h, 30m, 60s) or ISO datetime (got {value!r})"
+        )
+
+
+def _parse_time(value: str) -> float:
+    """Return a reference time in epoch seconds.
+
+    Epoch form: `1781204738.513` (the trailer's `last-time`).
+    Duration form: `7d`, `12h`, `30m`, `60s` → `now - N`.
+    Absolute form: ISO date/datetime; naive timestamps are local time.
+    """
+    secs = _duration_secs(value)
+    if secs is not None:
+        return time.time() - secs
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected epoch seconds, duration (e.g. 30m), "
+            f"or ISO datetime (got {value!r})"
         )
 
 
@@ -240,9 +271,9 @@ def _make_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "-t",
         "--time",
-        type=float,
+        type=_parse_time,
         default=None,
-        help="Lines with idx t <= T (epoch).",
+        help="Lines with idx t <= T: epoch, duration (30m), or ISO datetime.",
     )
     head_p.add_argument("selector", help="NAME or UUID-prefix.")
     head_p.set_defaults(func=verbs.cmd_head)
@@ -287,9 +318,9 @@ def _make_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "-t",
         "--time",
-        type=float,
+        type=_parse_time,
         default=None,
-        help="Lines with idx t > T (epoch).",
+        help="Lines with idx t > T: epoch, duration (30m), or ISO datetime.",
     )
     tail_p.add_argument("selector", help="NAME or UUID-prefix.")
     tail_p.set_defaults(func=verbs.cmd_tail)

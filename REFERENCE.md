@@ -115,7 +115,7 @@ options:
   --raw              Keep ANSI.
   -n, --lines LINES  First N lines (default 10); -N drops last N.
   -c, --bytes BYTES  First K bytes; -K drops last K.
-  -t, --time TIME    Lines with idx t <= T (epoch).
+  -t, --time TIME    Lines with idx t <= T: epoch, duration (30m), or ISO datetime.
 ```
 
 ## `live tail`
@@ -138,7 +138,7 @@ options:
   --raw              Keep ANSI.
   -n, --lines LINES  Last N lines (default 10); +N for lines n >= N.
   -c, --bytes BYTES  Last K bytes; +K for bytes after offset K.
-  -t, --time TIME    Lines with idx t > T (epoch).
+  -t, --time TIME    Lines with idx t > T: epoch, duration (30m), or ISO datetime.
 ```
 
 ## `live less`

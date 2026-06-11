@@ -43,7 +43,6 @@ global scope.
 live cat -v server
 live head -vn 50 server  # first 50 lines
 live tail -vn 50 server  # last 50 lines
-live tail -f server      # follow until exit
 live head -t 1m          # lines at or before epoch T or (now - interval)
 live tail -t 1m          # lines after epoch T or (now - interval)
 ```
@@ -56,8 +55,6 @@ With `-v`, log content goes to stdout and `live` metadata goes to stderr:
   `live: exit-code=<code>`
   or
   `live: exit=inconsistent`
-- hung: alive, but stalled
-  `live: status=hung last-activity=<s>`
 - gap: rotation dropped output
   `live: dropped <k> lines (from-line=<N>, first-line=<F>)`
   or

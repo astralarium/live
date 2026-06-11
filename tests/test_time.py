@@ -46,6 +46,29 @@ def test_time_filters_by_idx_timestamp(project: Path, run_live) -> None:
     assert "last-time=" in out.stderr
 
 
+def test_time_duration_form(project: Path, run_live) -> None:
+    # `-t 1h` = lines from the last hour: everything just recorded qualifies.
+    run_live(project, "run", "-n", "dur", "--", "sh", "-c", "echo recent")
+    out = run_live(project, "tail", "-v", "-t", "1h", "dur")
+    assert "recent" in out.stdout.replace("\r", "")
+
+    # A zero-length window excludes lines written before now.
+    out = run_live(project, "tail", "-v", "-t", "0s", "dur")
+    assert "recent" not in out.stdout.replace("\r", "")
+
+
+def test_time_iso_form(project: Path, run_live) -> None:
+    run_live(project, "run", "-n", "iso", "--", "sh", "-c", "echo hello")
+    out = run_live(project, "tail", "-t", "2000-01-01", "iso")
+    assert "hello" in out.stdout.replace("\r", "")
+
+
+def test_time_rejects_garbage(project: Path, run_live) -> None:
+    out = run_live(project, "tail", "-t", "5x", "whatever", check=False)
+    assert out.returncode == 2
+    assert "epoch seconds, duration" in out.stderr
+
+
 def test_time_quiet_without_verbose(project: Path, run_live) -> None:
     # -t alone (no -v) prints lines but no stderr metadata.
     run_live(project, "run", "-n", "quiet", "--", "sh", "-c", "echo hello")
