@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from . import __version__
 from . import verbs
@@ -34,6 +35,16 @@ def _parse_name(value: str) -> str:
         f"expected letters, digits, '.', '_', or '-', "
         f"not starting with '-' (got {value!r})"
     )
+
+
+def _parse_cwd(value: str) -> Path:
+    """Expand `~` and resolve to an absolute path; existence is not required
+    (scope filtering against a deleted directory is still meaningful). An
+    empty value is rejected: `Path("")` resolves to the invoking directory,
+    silently masking an unset shell variable."""
+    if not value:
+        raise argparse.ArgumentTypeError("expected a directory path (got '')")
+    return Path(value).expanduser().resolve()
 
 
 def _parse_age(value: str) -> float:
@@ -77,6 +88,31 @@ def _count_or_cursor(prefix: str):
     return parse
 
 
+def _add_cwd_arg(p, help_text: str) -> None:
+    """Add `-C/--cwd` to a parser or argument group."""
+    p.add_argument(
+        "-C",
+        "--cwd",
+        type=_parse_cwd,
+        default=None,
+        metavar="PATH",
+        help=help_text,
+    )
+
+
+def _add_scope_flags(p: argparse.ArgumentParser) -> None:
+    """Session scope: `-C` moves it to another directory, `-g` lifts the filter."""
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "-g",
+        "--global",
+        action="store_true",
+        dest="global_",
+        help="Global scope.",
+    )
+    _add_cwd_arg(g, "Directory scope (default: current directory).")
+
+
 class _Formatter(argparse.HelpFormatter):
     """Render `REMAINDER` positionals using their metavar instead of `...`."""
 
@@ -116,6 +152,7 @@ def _make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Detach: run in the background, print session id.",
     )
+    _add_cwd_arg(run_p, "Run <cmd> in PATH; scope session.")
     run_p.add_argument(
         "--geometry",
         type=_parse_geometry,
@@ -139,13 +176,7 @@ def _make_parser() -> argparse.ArgumentParser:
         formatter_class=_Formatter,
     )
     ls_p.add_argument("-a", "--all", action="store_true", help="Include exited.")
-    ls_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(ls_p)
     ls_p.add_argument("--json", action="store_true", help="Emit NDJSON.")
     ls_p.add_argument(
         "selector", nargs="?", default=None, help="NAME or UUID-prefix filter."
@@ -160,13 +191,7 @@ def _make_parser() -> argparse.ArgumentParser:
         formatter_class=_Formatter,
     )
     cat_p.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
-    cat_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(cat_p)
     ag = cat_p.add_mutually_exclusive_group()
     ag.add_argument(
         "--strip-ansi",
@@ -186,13 +211,7 @@ def _make_parser() -> argparse.ArgumentParser:
         formatter_class=_Formatter,
     )
     head_p.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
-    head_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(head_p)
     ag = head_p.add_mutually_exclusive_group()
     ag.add_argument(
         "--strip-ansi",
@@ -239,13 +258,7 @@ def _make_parser() -> argparse.ArgumentParser:
         "-f", "--follow", action="store_true", help="Follow until exit."
     )
     tail_p.add_argument("-v", "--verbose", action="store_true", help="Verbose output.")
-    tail_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(tail_p)
     ag = tail_p.add_mutually_exclusive_group()
     ag.add_argument(
         "--strip-ansi",
@@ -288,13 +301,7 @@ def _make_parser() -> argparse.ArgumentParser:
         description="Page session interactively.",
         formatter_class=_Formatter,
     )
-    less_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(less_p)
     ag = less_p.add_mutually_exclusive_group()
     ag.add_argument(
         "--strip-ansi",
@@ -313,13 +320,7 @@ def _make_parser() -> argparse.ArgumentParser:
         description="Stop running sessions.",
         formatter_class=_Formatter,
     )
-    stop_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(stop_p)
     stop_p.add_argument(
         "--all",
         action="store_true",
@@ -342,13 +343,7 @@ def _make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="SIGTERM live runs; ignore missing.",
     )
-    rm_p.add_argument(
-        "-g",
-        "--global",
-        action="store_true",
-        dest="global_",
-        help="Global scope.",
-    )
+    _add_scope_flags(rm_p)
     rm_p.add_argument(
         "--all",
         action="store_true",
@@ -379,12 +374,40 @@ def _make_parser() -> argparse.ArgumentParser:
     # completion
     comp_p = sub.add_parser(
         "completion",
+        help="Print completion candidates.",
+        description="Print completion candidates, one per line "
+        "(plumbing for the shell completion scripts).",
+        formatter_class=_Formatter,
+    )
+    comp_sub = comp_p.add_subparsers(dest="what", metavar="<what>", required=True)
+    sel_p = comp_sub.add_parser(
+        "selectors",
+        help="Session names and ids.",
+        description="Print session names and ids.",
+        formatter_class=_Formatter,
+    )
+    sel_p.add_argument("-a", "--all", action="store_true", help="Include exited.")
+    _add_scope_flags(sel_p)
+    sel_p.set_defaults(func=verbs.cmd_completion_selectors)
+    cwds_p = comp_sub.add_parser(
+        "cwds",
+        help="Session working directories.",
+        description="Print the distinct cwds of all sessions.",
+        formatter_class=_Formatter,
+    )
+    cwds_p.set_defaults(func=verbs.cmd_completion_cwds)
+
+    # completion-script
+    script_p = sub.add_parser(
+        "completion-script",
         help="Print shell completion script.",
         description="Print shell completion script.",
         formatter_class=_Formatter,
     )
-    comp_p.add_argument("shell", choices=["bash", "zsh", "fish"], help="Target shell.")
-    comp_p.set_defaults(func=verbs.cmd_completion)
+    script_p.add_argument(
+        "shell", choices=["bash", "zsh", "fish"], help="Target shell."
+    )
+    script_p.set_defaults(func=verbs.cmd_completion_script)
 
     # update-shell
     up_p = sub.add_parser(

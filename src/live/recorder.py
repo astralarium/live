@@ -62,19 +62,22 @@ class _Recorder:
         name: str | None,
         detach: bool = False,
         geometry: tuple[int, int] | None = None,
+        *,
+        cwd: Path,
     ):
         self.cfg = cfg
         self.command = command
         self.name = name
         self.detach = detach
         self.geometry = geometry
+        self.cwd = cwd
 
         self.session_id = str(uuid.uuid4())
         self.dir: Path = session_dir(self.session_id)
         self.meta = Meta(
             id=self.session_id,
             command=list(command),
-            cwd=os.getcwd(),
+            cwd=str(cwd),
             started_at=time.time(),
             name=name,
         )
@@ -156,6 +159,11 @@ class _Recorder:
         if self.child_pid == 0:
             # Child: exec the wrapped command. On failure, exit nonzero so the
             # parent can graceful-exit with a real status.
+            try:
+                os.chdir(self.cwd)
+            except OSError as e:
+                os.write(2, f"live: chdir failed: {e}\n".encode())
+                os._exit(126)
             try:
                 os.execvp(self.command[0], self.command)
             except FileNotFoundError:
@@ -520,14 +528,17 @@ def record(
     command: list[str],
     name: str | None = None,
     geometry: tuple[int, int] | None = None,
+    *,
+    cwd: Path,
     after_setup=None,
 ) -> int:
     """Run `command` under live recording. Returns its exit code.
 
+    `cwd` is the child's working directory and the session's scope.
     `after_setup` (if given) runs once the session is publicly visible
     (dir + lock + meta), before the child is forked.
     """
-    rec = _Recorder(cfg, command, name, geometry=geometry)
+    rec = _Recorder(cfg, command, name, geometry=geometry, cwd=cwd)
     rec.setup_session()
     if after_setup is not None:
         after_setup()
@@ -549,6 +560,8 @@ def record_detached(
     command: list[str],
     name: str | None = None,
     geometry: tuple[int, int] | None = None,
+    *,
+    cwd: Path,
 ) -> tuple[str | None, str | None]:
     """Fork a recorder that survives the calling shell; don't wait for it.
 
@@ -573,7 +586,9 @@ def record_detached(
             if devnull > 2:
                 os.close(devnull)
             os.setsid()
-            rec = _Recorder(cfg, command, name, detach=True, geometry=geometry)
+            rec = _Recorder(
+                cfg, command, name, detach=True, geometry=geometry, cwd=cwd
+            )
             try:
                 rec.setup_session()
             except Exception as e:

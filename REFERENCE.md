@@ -10,6 +10,7 @@
 - [`live stop`](#live-stop)
 - [`live rm`](#live-rm)
 - [`live completion`](#live-completion)
+- [`live completion-script`](#live-completionscript)
 - [`live update-shell`](#live-updateshell)
 - [`live llms.txt`](#live-llmstxt)
 
@@ -22,27 +23,28 @@ Live stream command line output.
 
 positional arguments:
   <verb>
-    run           Run <cmd> under a PTY; record.
-    ls            List sessions.
-    cat           Concatenate session.
-    head          Head session.
-    tail          Tail session.
-    less          Page session.
-    stop          Stop running sessions.
-    rm            Delete sessions.
-    completion    Print shell completion script.
-    update-shell  Install shell completions.
-    llms.txt      Print agent instructions.
+    run                Run <cmd> under a PTY; record.
+    ls                 List sessions.
+    cat                Concatenate session.
+    head               Head session.
+    tail               Tail session.
+    less               Page session.
+    stop               Stop running sessions.
+    rm                 Delete sessions.
+    completion         Print completion candidates.
+    completion-script  Print shell completion script.
+    update-shell       Install shell completions.
+    llms.txt           Print agent instructions.
 
 options:
-  -h, --help      show this help message and exit
-  --version       show program's version number and exit
+  -h, --help           show this help message and exit
+  --version            show program's version number and exit
 ```
 
 ## `live run`
 
 ```
-usage: live run [-h] [-n NAME] [-d] [--geometry COLSxROWS] cmd ...
+usage: live run [-h] [-n NAME] [-d] [-C PATH] [--geometry COLSxROWS] cmd ...
 
 Run a command under a PTY and record its output.
 
@@ -53,48 +55,51 @@ options:
   -h, --help            show this help message and exit
   -n, --name NAME       Session name (letters, digits, '.', '_', '-').
   -d, --detach          Detach: run in the background, print session id.
+  -C, --cwd PATH        Run <cmd> in PATH; scope session.
   --geometry COLSxROWS  PTY size (default: the terminal's size, else 80x24).
 ```
 
 ## `live ls`
 
 ```
-usage: live ls [-h] [-a] [-g] [--json] [selector]
+usage: live ls [-h] [-a] [-g | -C PATH] [--json] [selector]
 
 List recorded sessions.
 
 positional arguments:
-  selector      NAME or UUID-prefix filter.
+  selector        NAME or UUID-prefix filter.
 
 options:
-  -h, --help    show this help message and exit
-  -a, --all     Include exited.
-  -g, --global  Global scope.
-  --json        Emit NDJSON.
+  -h, --help      show this help message and exit
+  -a, --all       Include exited.
+  -g, --global    Global scope.
+  -C, --cwd PATH  Directory scope (default: current directory).
+  --json          Emit NDJSON.
 ```
 
 ## `live cat`
 
 ```
-usage: live cat [-h] [-v] [-g] [--strip-ansi | --raw] selector
+usage: live cat [-h] [-v] [-g | -C PATH] [--strip-ansi | --raw] selector
 
 Display a session's full output.
 
 positional arguments:
-  selector       NAME or UUID-prefix.
+  selector        NAME or UUID-prefix.
 
 options:
-  -h, --help     show this help message and exit
-  -v, --verbose  Verbose output.
-  -g, --global   Global scope.
-  --strip-ansi   Strip ANSI.
-  --raw          Keep ANSI.
+  -h, --help      show this help message and exit
+  -v, --verbose   Verbose output.
+  -g, --global    Global scope.
+  -C, --cwd PATH  Directory scope (default: current directory).
+  --strip-ansi    Strip ANSI.
+  --raw           Keep ANSI.
 ```
 
 ## `live head`
 
 ```
-usage: live head [-h] [-v] [-g] [--strip-ansi | --raw] [-n LINES | -c BYTES | -t TIME] selector
+usage: live head [-h] [-v] [-g | -C PATH] [--strip-ansi | --raw] [-n LINES | -c BYTES | -t TIME] selector
 
 Display the first part of a session.
 
@@ -105,6 +110,7 @@ options:
   -h, --help         show this help message and exit
   -v, --verbose      Verbose output.
   -g, --global       Global scope.
+  -C, --cwd PATH     Directory scope (default: current directory).
   --strip-ansi       Strip ANSI.
   --raw              Keep ANSI.
   -n, --lines LINES  First N lines (default 10); -N drops last N.
@@ -115,7 +121,7 @@ options:
 ## `live tail`
 
 ```
-usage: live tail [-h] [-f] [-v] [-g] [--strip-ansi | --raw] [-n LINES | -c BYTES | -t TIME] selector
+usage: live tail [-h] [-f] [-v] [-g | -C PATH] [--strip-ansi | --raw] [-n LINES | -c BYTES | -t TIME] selector
 
 Display the last part of a session.
 
@@ -127,6 +133,7 @@ options:
   -f, --follow       Follow until exit.
   -v, --verbose      Verbose output.
   -g, --global       Global scope.
+  -C, --cwd PATH     Directory scope (default: current directory).
   --strip-ansi       Strip ANSI.
   --raw              Keep ANSI.
   -n, --lines LINES  Last N lines (default 10); +N for lines n >= N.
@@ -137,40 +144,42 @@ options:
 ## `live less`
 
 ```
-usage: live less [-h] [-g] [--strip-ansi | --raw] selector
+usage: live less [-h] [-g | -C PATH] [--strip-ansi | --raw] selector
 
 Page session interactively.
 
 positional arguments:
-  selector      NAME or UUID-prefix.
+  selector        NAME or UUID-prefix.
 
 options:
-  -h, --help    show this help message and exit
-  -g, --global  Global scope.
-  --strip-ansi  Strip ANSI.
-  --raw         Keep ANSI.
+  -h, --help      show this help message and exit
+  -g, --global    Global scope.
+  -C, --cwd PATH  Directory scope (default: current directory).
+  --strip-ansi    Strip ANSI.
+  --raw           Keep ANSI.
 ```
 
 ## `live stop`
 
 ```
-usage: live stop [-h] [-g] [--all] [selectors ...]
+usage: live stop [-h] [-g | -C PATH] [--all] [selectors ...]
 
 Stop running sessions.
 
 positional arguments:
-  selectors     NAME(s) or UUID-prefix(es).
+  selectors       NAME(s) or UUID-prefix(es).
 
 options:
-  -h, --help    show this help message and exit
-  -g, --global  Global scope.
-  --all         Stop all running sessions.
+  -h, --help      show this help message and exit
+  -g, --global    Global scope.
+  -C, --cwd PATH  Directory scope (default: current directory).
+  --all           Stop all running sessions.
 ```
 
 ## `live rm`
 
 ```
-usage: live rm [-h] [-f] [-g] [--all] [--exited] [--untitled] [--older-than AGE] [selectors ...]
+usage: live rm [-h] [-f] [-g | -C PATH] [--all] [--exited] [--untitled] [--older-than AGE] [selectors ...]
 
 Remove recorded sessions.
 
@@ -181,6 +190,7 @@ options:
   -h, --help        show this help message and exit
   -f, --force       SIGTERM live runs; ignore missing.
   -g, --global      Global scope.
+  -C, --cwd PATH    Directory scope (default: current directory).
   --all             Delete all sessions.
   --exited          Delete exited sessions.
   --untitled        Delete unnamed sessions.
@@ -190,7 +200,23 @@ options:
 ## `live completion`
 
 ```
-usage: live completion [-h] {bash,zsh,fish}
+usage: live completion [-h] <what> ...
+
+Print completion candidates, one per line (plumbing for the shell completion scripts).
+
+positional arguments:
+  <what>
+    selectors  Session names and ids.
+    cwds       Session working directories.
+
+options:
+  -h, --help   show this help message and exit
+```
+
+## `live completion-script`
+
+```
+usage: live completion-script [-h] {bash,zsh,fish}
 
 Print shell completion script.
 

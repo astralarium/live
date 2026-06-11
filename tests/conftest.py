@@ -128,7 +128,8 @@ def live_shim(tmp_path: Path, live_env):
     """Install a `live` shim on `$PATH` that re-execs `python -m live.cli`.
 
     Needed when a test drives a completion script that itself shells out to
-    `live ls`. Returns the env dict (a copy of `live_env`) with `PATH` prepended.
+    `live completion ...`. Returns the env dict (a copy of `live_env`) with
+    `PATH` prepended.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)

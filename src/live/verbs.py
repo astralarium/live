@@ -87,9 +87,14 @@ def _emit_read_result(
 # ----- verbs -----
 
 
+def _effective_cwd(args) -> Path:
+    """The `-C` value, else the caller's cwd."""
+    return args.cwd if args.cwd is not None else Path.cwd()
+
+
 def _scope_filter(args) -> Path | None:
-    """cwd filter for read verbs; None means global view (`-g`)."""
-    return None if getattr(args, "global_", False) else Path.cwd()
+    """cwd filter for read verbs; `-C` overrides, None means global view (`-g`)."""
+    return None if args.global_ else _effective_cwd(args)
 
 
 def cmd_run(args) -> int:
@@ -103,6 +108,10 @@ def cmd_run(args) -> int:
     if not cmd:
         _err("run: missing command")
         return 2
+    if args.cwd is not None and not args.cwd.is_dir():
+        _err(f"run: no such directory: {args.cwd}")
+        return 2
+    cwd = _effective_cwd(args)
 
     # Named runs serialize on a global lock spanning the conflict check and
     # session creation (meta is written before release), so concurrent
@@ -115,7 +124,6 @@ def cmd_run(args) -> int:
             # may share it. Only in-scope runs get the stop hint: an
             # ancestor's run is out of scope here, and a child shouldn't be
             # told how to kill its parent.
-            cwd = Path.cwd()
             in_scope: list[SessionInfo] = []
             ancestors: list[SessionInfo] = []
             for s in list_sessions(cfg):
@@ -140,7 +148,7 @@ def cmd_run(args) -> int:
 
         if args.detach:
             session_id, error = record_detached(
-                cfg, cmd, name=args.name, geometry=args.geometry
+                cfg, cmd, name=args.name, geometry=args.geometry, cwd=cwd
             )
             if error is not None:
                 _err(f"run: {error}")
@@ -153,6 +161,7 @@ def cmd_run(args) -> int:
             cmd,
             name=args.name,
             geometry=args.geometry,
+            cwd=cwd,
             after_setup=guard.release if guard is not None else None,
         )
     finally:
@@ -594,7 +603,37 @@ def cmd_llms_txt(args) -> int:
     return 0
 
 
-def cmd_completion(args) -> int:
+def cmd_completion_selectors(args) -> int:
+    """Print selector candidates (names + ids), one per line.
+
+    Plumbing for the shell completion scripts; scoped like `ls`.
+    """
+    cfg = load_config()
+    sweep_all(cfg)
+    sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
+    if not args.all:
+        sessions = [s for s in sessions if s.status in ("running", "hung")]
+    tokens = {s.id for s in sessions} | {
+        s.meta.name for s in sessions if s.meta.name is not None
+    }
+    for token in sorted(tokens):
+        print(token)
+    return 0
+
+
+def cmd_completion_cwds(args) -> int:
+    """Print the distinct cwds of all sessions, one per line.
+
+    Plumbing for `-C/--cwd` value completion in the shell scripts.
+    """
+    cfg = load_config()
+    sweep_all(cfg)
+    for cwd in sorted({s.meta.cwd for s in list_sessions(cfg)}):
+        print(cwd)
+    return 0
+
+
+def cmd_completion_script(args) -> int:
     from .completion import script_for
 
     payload = script_for(args.shell)

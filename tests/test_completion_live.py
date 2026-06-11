@@ -1,7 +1,7 @@
 """Live execution of generated completion scripts in real shells.
 
 Sources each shell's payload, drives completion non-interactively, and checks
-the offered candidates include the expected verbs and flags.
+the offered candidates include the expected verbs, flags, and selectors.
 """
 
 from __future__ import annotations
@@ -22,92 +22,74 @@ def _have(shell: str) -> bool:
     return shutil.which(shell) is not None
 
 
+def _payload(run_live, tmp_path: Path, shell: str) -> Path:
+    name = {"bash": "live.bash", "zsh": "_live", "fish": "live.fish"}[shell]
+    p = tmp_path / name
+    p.write_text(run_live(tmp_path, "completion-script", shell).stdout)
+    return p
+
+
+def _drive_bash(
+    payload: Path,
+    words: tuple[str, ...],
+    cword: int,
+    *,
+    env: dict | None = None,
+    cwd: Path | None = None,
+    prelude: str = "",
+) -> set[str]:
+    """Source `payload`, run `_live_complete` against COMP_WORDS=`words`,
+    and return the emitted lines (COMPREPLY plus any prelude output)."""
+    words_bash = " ".join(f'"{w}"' for w in words)
+    comp_line = " ".join(words)
+    script = f"""
+set +e
+{prelude}
+source {payload}
+COMP_WORDS=({words_bash})
+COMP_CWORD={cword}
+COMP_LINE="{comp_line}"
+COMP_POINT=${{#COMP_LINE}}
+_live_complete 2>/dev/null
+printf '%s\\n' "${{COMPREPLY[@]}}"
+"""
+    out = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True, text=True, check=True,
+        env=env, cwd=str(cwd) if cwd is not None else None,
+    ).stdout
+    return {ln for ln in out.splitlines() if ln}
+
+
+def _drive_fish(payload: Path, line: str, *, env: dict | None = None,
+                cwd: Path | None = None) -> set[str]:
+    """Drive fish's `complete -C` against the sourced payload; return the
+    candidate tokens (descriptions stripped)."""
+    out = subprocess.run(
+        ["fish", "-c", f"source {payload}; complete -C '{line}'"],
+        capture_output=True, text=True, check=True,
+        env=env, cwd=str(cwd) if cwd is not None else None,
+    ).stdout
+    return {ln.split("\t", 1)[0] for ln in out.splitlines() if ln}
+
+
 # ----- fish -----
 
 
 @pytest.mark.skipif(not _have("fish"), reason="fish not installed")
 def test_fish_completes_verbs(run_live, tmp_path: Path) -> None:
-    script = run_live(tmp_path, "completion", "fish").stdout
-    payload = tmp_path / "live.fish"
-    payload.write_text(script)
-    out = subprocess.run(
-        ["fish", "-c", f"source {payload}; complete -C 'live '"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    # Fish prints `verb\tdescription` per line.
-    candidates = {line.split("\t", 1)[0] for line in out.splitlines() if line}
+    payload = _payload(run_live, tmp_path, "fish")
+    candidates = _drive_fish(payload, "live ")
     assert CORE_VERBS <= candidates, f"missing: {CORE_VERBS - candidates}; got: {candidates}"
 
 
 @pytest.mark.skipif(not _have("fish"), reason="fish not installed")
 def test_fish_completes_tail_flags(run_live, tmp_path: Path) -> None:
-    script = run_live(tmp_path, "completion", "fish").stdout
-    payload = tmp_path / "live.fish"
-    payload.write_text(script)
-    out = subprocess.run(
-        ["fish", "-c", f"source {payload}; complete -C 'live tail -'"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    candidates = {line.split("\t", 1)[0] for line in out.splitlines() if line}
+    payload = _payload(run_live, tmp_path, "fish")
+    candidates = _drive_fish(payload, "live tail -")
     # Should at least suggest -f and -t/--time for `live tail -`.
     assert any(c.startswith("-f") or c == "--follow" for c in candidates), candidates
     assert any(c == "--time" or c == "-t" for c in candidates), candidates
-
-
-# ----- bash -----
-
-
-_BASH_DRIVE = r"""
-set +e
-source {payload}
-COMP_WORDS=(live "{partial}")
-COMP_CWORD=1
-COMP_LINE="live {partial}"
-COMP_POINT=${{#COMP_LINE}}
-_live_complete 2>/dev/null
-printf '%s\n' "${{COMPREPLY[@]}}"
-"""
-
-
-@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
-def test_bash_completes_verbs(run_live, tmp_path: Path) -> None:
-    script = run_live(tmp_path, "completion", "bash").stdout
-    payload = tmp_path / "live.bash"
-    payload.write_text(script)
-    out = subprocess.run(
-        ["bash", "-c", _BASH_DRIVE.format(payload=payload, partial="")],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    candidates = {ln for ln in out.split() if ln}
-    assert CORE_VERBS <= candidates, f"missing: {CORE_VERBS - candidates}; got: {candidates}"
-
-
-@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
-def test_bash_completes_tail_flags(run_live, tmp_path: Path) -> None:
-    script = run_live(tmp_path, "completion", "bash").stdout
-    payload = tmp_path / "live.bash"
-    payload.write_text(script)
-    # COMP_WORDS for `live tail -` is ("live", "tail", "-").
-    drive = r"""
-set +e
-source {payload}
-COMP_WORDS=(live tail "-")
-COMP_CWORD=2
-COMP_LINE="live tail -"
-COMP_POINT=${{#COMP_LINE}}
-_live_complete 2>/dev/null
-printf '%s\n' "${{COMPREPLY[@]}}"
-""".format(payload=payload)
-    out = subprocess.run(
-        ["bash", "-c", drive],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    candidates = {ln for ln in out.split() if ln}
-    assert "-f" in candidates or "--follow" in candidates, candidates
-    assert any(c == "--time" or c == "-t" for c in candidates), candidates
-
-
-# ----- zsh -----
 
 
 @pytest.mark.skipif(not _have("fish"), reason="fish not installed")
@@ -121,16 +103,62 @@ def test_fish_run_falls_through_to_filename_completion(
     (target_dir / "uniqueapple.txt").touch()
     (target_dir / "uniqueberry.txt").touch()
 
-    script = run_live(tmp_path, "completion", "fish").stdout
-    payload = tmp_path / "live.fish"
-    payload.write_text(script)
-    out = subprocess.run(
-        ["fish", "-c",
-         f"source {payload}; complete -C 'live run cat {target_dir}/unique'"],
-        capture_output=True, text=True, check=True,
-    ).stdout
-    assert "uniqueapple.txt" in out, out
-    assert "uniqueberry.txt" in out, out
+    payload = _payload(run_live, tmp_path, "fish")
+    candidates = _drive_fish(payload, f"live run cat {target_dir}/unique")
+    assert any("uniqueapple.txt" in c for c in candidates), candidates
+    assert any("uniqueberry.txt" in c for c in candidates), candidates
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_run_handoff_skips_flag_values(run_live, tmp_path: Path) -> None:
+    """A `-C DIR` (or other value-taking flag) before the wrapped command must
+    not be mistaken for the command itself, and `run`'s own flags must not be
+    offered inside the wrapped command."""
+    target_dir = tmp_path / "ftarget"
+    target_dir.mkdir()
+    (target_dir / "uniqueapple.txt").touch()
+
+    payload = _payload(run_live, tmp_path, "fish")
+    candidates = _drive_fish(
+        payload, f"live run -C {tmp_path} cat {target_dir}/unique"
+    )
+    assert any("uniqueapple.txt" in c for c in candidates), candidates
+
+    inside_cmd = _drive_fish(payload, "live run cat -")
+    assert "--detach" not in inside_cmd, inside_cmd
+    assert "--geometry" not in inside_cmd, inside_cmd
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_cwd_flag_completes_session_cwds(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    proj.mkdir()
+    run_live(proj, "run", "-n", "scoped", "--", "sh", "-c", "echo a")
+
+    payload = _payload(run_live, tmp_path, "fish")
+    candidates = _drive_fish(payload, "live ls -C ", env=test_env, cwd=tmp_path)
+    assert str(proj.resolve()) in candidates, candidates
+
+
+# ----- bash -----
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_completes_verbs(run_live, tmp_path: Path) -> None:
+    payload = _payload(run_live, tmp_path, "bash")
+    candidates = _drive_bash(payload, ("live", ""), cword=1)
+    assert CORE_VERBS <= candidates, f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_completes_tail_flags(run_live, tmp_path: Path) -> None:
+    payload = _payload(run_live, tmp_path, "bash")
+    candidates = _drive_bash(payload, ("live", "tail", "-"), cword=2)
+    assert "-f" in candidates or "--follow" in candidates, candidates
+    assert any(c == "--time" or c == "-t" for c in candidates), candidates
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
@@ -142,22 +170,13 @@ def test_bash_run_hands_off_via_command_offset(
     `_command_offset` is provided by bash-completion; we stub it here so the test
     doesn't depend on bash-completion being installed.
     """
-    script = run_live(tmp_path, "completion", "bash").stdout
-    payload = tmp_path / "live.bash"
-    payload.write_text(script)
-    drive = f"""
-set +e
-_command_offset() {{ echo "OFFSET_CALLED=$1"; }}
-source {payload}
-COMP_WORDS=(live run somecmd "")
-COMP_CWORD=3
-COMP_LINE="live run somecmd "
-COMP_POINT=${{#COMP_LINE}}
-_live_complete 2>/dev/null
-"""
-    out = subprocess.run(
-        ["bash", "-c", drive], capture_output=True, text=True, check=True,
-    ).stdout
+    payload = _payload(run_live, tmp_path, "bash")
+    out = _drive_bash(
+        payload,
+        ("live", "run", "somecmd", ""),
+        cword=3,
+        prelude='_command_offset() { echo "OFFSET_CALLED=$1"; }',
+    )
     # somecmd is at index 2 in COMP_WORDS (live=0, run=1, somecmd=2).
     assert "OFFSET_CALLED=2" in out, f"handoff not triggered; got: {out!r}"
 
@@ -168,26 +187,16 @@ def test_bash_run_offers_own_flags_before_command(
 ) -> None:
     """Before any wrapped command is typed, `live run -<TAB>` offers our own flags
     (`-n`/`--name`/`--`) — NOT a handoff to anything else."""
-    script = run_live(tmp_path, "completion", "bash").stdout
-    payload = tmp_path / "live.bash"
-    payload.write_text(script)
-    drive = f"""
-set +e
-_command_offset() {{ echo "OFFSET_CALLED=$1"; }}  # should NOT fire
-source {payload}
-COMP_WORDS=(live run "-")
-COMP_CWORD=2
-COMP_LINE="live run -"
-COMP_POINT=${{#COMP_LINE}}
-_live_complete 2>/dev/null
-printf '%s\\n' "${{COMPREPLY[@]}}"
-"""
-    out = subprocess.run(
-        ["bash", "-c", drive], capture_output=True, text=True, check=True,
-    ).stdout
-    assert "OFFSET_CALLED" not in out, f"handoff fired prematurely: {out!r}"
-    assert "-n" in out.split(), out
-    assert "--name" in out.split(), out
+    payload = _payload(run_live, tmp_path, "bash")
+    out = _drive_bash(
+        payload,
+        ("live", "run", "-"),
+        cword=2,
+        prelude='_command_offset() { echo "OFFSET_CALLED=$1"; }',  # should NOT fire
+    )
+    assert not any("OFFSET_CALLED" in ln for ln in out), f"handoff fired prematurely: {out!r}"
+    assert "-n" in out, out
+    assert "--name" in out, out
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
@@ -216,40 +225,26 @@ def test_bash_ls_completes_only_active_sessions(
             timeout=8.0,
         ), "running session never appeared"
 
-        script = run_live(tmp_path, "completion", "bash").stdout
-        payload = tmp_path / "live.bash"
-        payload.write_text(script)
-
-        def drive(verb_words: str, cword: int) -> set[str]:
-            drive_script = f"""
-set +e
-source {payload}
-COMP_WORDS=(live {verb_words})
-COMP_CWORD={cword}
-COMP_LINE="live {verb_words.replace('"', '')}"
-COMP_POINT=${{#COMP_LINE}}
-_live_complete 2>/dev/null
-printf '%s\\n' "${{COMPREPLY[@]}}"
-"""
-            out = subprocess.run(
-                ["bash", "-c", drive_script],
-                capture_output=True, text=True, check=True,
-                env=test_env, cwd=str(tmp_path),
-            ).stdout
-            return {ln for ln in out.split() if ln}
+        payload = _payload(run_live, tmp_path, "bash")
 
         # `live ls <TAB>` — active only.
-        ls_active = drive('ls ""', cword=2)
+        ls_active = _drive_bash(
+            payload, ("live", "ls", ""), cword=2, env=test_env, cwd=tmp_path
+        )
         assert "liverun" in ls_active, ls_active
         assert "deadname" not in ls_active, ls_active
 
         # `live ls -a <TAB>` — both.
-        ls_all = drive('ls -a ""', cword=3)
+        ls_all = _drive_bash(
+            payload, ("live", "ls", "-a", ""), cword=3, env=test_env, cwd=tmp_path
+        )
         assert "liverun" in ls_all, ls_all
         assert "deadname" in ls_all, ls_all
 
         # `live rm <TAB>` — both (rm always passes -a internally).
-        rm_all = drive('rm ""', cword=2)
+        rm_all = _drive_bash(
+            payload, ("live", "rm", ""), cword=2, env=test_env, cwd=tmp_path
+        )
         assert "liverun" in rm_all, rm_all
         assert "deadname" in rm_all, rm_all
     finally:
@@ -270,55 +265,93 @@ def test_bash_numeric_values_dont_break_selector_completion(
     test_env = live_shim
 
     run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
 
-    script = run_live(tmp_path, "completion", "bash").stdout
-    payload = tmp_path / "live.bash"
-    payload.write_text(script)
-
-    def drive(words_tuple: tuple[str, ...], cword: int) -> set[str]:
-        # Render COMP_WORDS verbatim — each token in its own quoted slot.
-        words_bash = " ".join(f'"{w}"' for w in words_tuple)
-        comp_line = " ".join(words_tuple)
-        drive_script = f"""
-set +e
-source {payload}
-COMP_WORDS=({words_bash})
-COMP_CWORD={cword}
-COMP_LINE="{comp_line}"
-COMP_POINT=${{#COMP_LINE}}
-_live_complete 2>/dev/null
-printf '%s\\n' "${{COMPREPLY[@]}}"
-"""
-        out = subprocess.run(
-            ["bash", "-c", drive_script],
-            capture_output=True, text=True, check=True,
-            env=test_env, cwd=str(tmp_path),
-        ).stdout
-        return {ln for ln in out.split() if ln}
+    def drive(words: tuple[str, ...], cword: int) -> set[str]:
+        return _drive_bash(payload, words, cword, env=test_env, cwd=tmp_path)
 
     # `live head -n -3 <TAB>` — cur=""; expect selectors offered, not flags.
-    head_minus = drive(("live", "head", "-n", "-3", ""), cword=4)
-    assert "target" in head_minus, head_minus
+    assert "target" in drive(("live", "head", "-n", "-3", ""), cword=4)
 
     # `live head -n +3 <TAB>` — noop sign on head; still selectors.
-    head_plus = drive(("live", "head", "-n", "+3", ""), cword=4)
-    assert "target" in head_plus, head_plus
+    assert "target" in drive(("live", "head", "-n", "+3", ""), cword=4)
 
     # `live tail -c +5 <TAB>` — byte cursor; still selectors.
-    tail_plus = drive(("live", "tail", "-c", "+5", ""), cword=4)
-    assert "target" in tail_plus, tail_plus
+    assert "target" in drive(("live", "tail", "-c", "+5", ""), cword=4)
 
     # `live tail -c -5 <TAB>` — noop sign on tail; still selectors.
-    tail_minus = drive(("live", "tail", "-c", "-5", ""), cword=4)
-    assert "target" in tail_minus, tail_minus
+    assert "target" in drive(("live", "tail", "-c", "-5", ""), cword=4)
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_cwd_flag_completes_session_cwds(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live ls -C <TAB>` offers the cwds of recorded sessions; a typed
+    `-C <dir>` scopes subsequent selector completion to that directory."""
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    other = tmp_path / "otherdir"
+    proj.mkdir()
+    other.mkdir()
+    run_live(proj, "run", "-n", "scoped", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
+    session_cwd = str(proj.resolve())
+
+    def drive(words: tuple[str, ...], cword: int) -> set[str]:
+        return _drive_bash(payload, words, cword, env=test_env, cwd=other)
+
+    # `live ls -C <TAB>` — the recorded session's cwd is offered.
+    assert session_cwd in drive(("live", "ls", "-C", ""), cword=3)
+
+    # `live cat <TAB>` from an unrelated dir — out of scope, no selectors.
+    assert "scoped" not in drive(("live", "cat", ""), cword=2)
+
+    # `live cat -C <dir> <TAB>` — selectors scoped to <dir>.
+    assert "scoped" in drive(("live", "cat", "-C", session_cwd, ""), cword=4)
+
+    # `live cat --cwd=<dir> <TAB>` — readline splits on `=` into
+    # ("--cwd" "=" <dir>); the scope must still be honored.
+    assert "scoped" in drive(
+        ("live", "cat", "--cwd", "=", session_cwd, ""), cword=5
+    )
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_cwd_with_spaces_completes_and_scopes(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """Session cwds containing spaces survive `-C` value completion as a
+    single candidate and scope selector completion correctly."""
+    test_env = live_shim
+    proj = tmp_path / "my proj"
+    proj.mkdir()
+    run_live(proj, "run", "-n", "spacey", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
+    session_cwd = str(proj.resolve())
+
+    offered = _drive_bash(
+        payload, ("live", "ls", "-C", ""), cword=3, env=test_env, cwd=tmp_path
+    )
+    assert session_cwd in offered, offered
+
+    scoped = _drive_bash(
+        payload,
+        ("live", "cat", "-C", session_cwd, ""),
+        cword=4,
+        env=test_env,
+        cwd=tmp_path,
+    )
+    assert "spacey" in scoped, scoped
+
+
+# ----- zsh -----
 
 
 @pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")
 def test_zsh_script_parses_cleanly(run_live, tmp_path: Path) -> None:
     """Catch bash-isms / syntax errors that autoload would otherwise defer."""
-    script = run_live(tmp_path, "completion", "zsh").stdout
-    payload = tmp_path / "_live"
-    payload.write_text(script)
+    payload = _payload(run_live, tmp_path, "zsh")
     # `zsh -n` parses without executing — surfaces syntax errors immediately.
     result = subprocess.run(
         ["zsh", "-n", str(payload)],
@@ -332,7 +365,7 @@ def test_zsh_script_parses_cleanly(run_live, tmp_path: Path) -> None:
 @pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")
 def test_zsh_registers_completion(run_live, tmp_path: Path) -> None:
     """Verify the completion script loads cleanly and registers `_live`."""
-    script = run_live(tmp_path, "completion", "zsh").stdout
+    script = run_live(tmp_path, "completion-script", "zsh").stdout
     fpath_dir = tmp_path / "zfunc"
     fpath_dir.mkdir()
     (fpath_dir / "_live").write_text(script)
@@ -347,3 +380,39 @@ def test_zsh_registers_completion(run_live, tmp_path: Path) -> None:
         ["zsh", "-c", inner], capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert out and out != "MISSING", f"zsh did not register completion: {out!r}"
+
+
+@pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")
+def test_zsh_selectors_honor_all_cwd_forms(run_live, live_shim, tmp_path: Path) -> None:
+    """`_live_selectors` recognizes `-C <dir>`, attached `-C<dir>` (the form
+    zsh's own `-C+` spec inserts), and `--cwd=<dir>`."""
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    other = tmp_path / "otherdir"
+    proj.mkdir()
+    other.mkdir()
+    run_live(proj, "run", "-n", "zscoped", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "zsh")
+    session_cwd = str(proj.resolve())
+
+    def selectors(*words: str) -> set[str]:
+        # Extract _live_selectors and stub the compsys builtins it calls.
+        words_z = " ".join(f"'{w}'" for w in words)
+        inner = (
+            f"fns=$(awk '/^_live_selectors\\(\\) \\{{/,/^\\}}/' {payload}); "
+            f"eval \"$fns\"; "
+            "_values() { shift; printf '%s\\n' \"$@\"; }; "
+            f"words=({words_z} ''); "
+            "_live_selectors; :"  # empty result is not an error
+        )
+        out = subprocess.run(
+            ["zsh", "-c", inner],
+            capture_output=True, text=True, check=True,
+            env=test_env, cwd=str(other),
+        ).stdout
+        return {ln for ln in out.splitlines() if ln}
+
+    assert "zscoped" not in selectors("cat")
+    assert "zscoped" in selectors("cat", "-C", session_cwd)
+    assert "zscoped" in selectors("cat", f"-C{session_cwd}")
+    assert "zscoped" in selectors("cat", f"--cwd={session_cwd}")

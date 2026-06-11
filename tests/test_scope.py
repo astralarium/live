@@ -1,7 +1,9 @@
-"""cwd-or-descendant scope filter and `-g`/`--global` widening.
+"""cwd-or-descendant scope filter, `-g`/`--global` widening, and `-C`/`--cwd`.
 
 Read verbs default to sessions whose `meta.cwd` is the caller's cwd or a
-descendant. `-g` lifts the filter to all sessions in `~/.live/sessions/`.
+descendant. `-g` lifts the filter to all sessions in `~/.live/sessions/`;
+`-C PATH` scopes to PATH instead of the caller's cwd. On `run`, `-C` is the
+child's working directory and the session's scope.
 """
 
 from __future__ import annotations
@@ -65,6 +67,72 @@ def test_cat_respects_scope(project: Path, run_live) -> None:
 
     hit = run_live(b, "cat", "-g", "elsewhere")
     assert "hi" in hit.stdout
+
+
+def test_ls_cwd_flag_scopes_to_other_dir(project: Path, run_live) -> None:
+    a = project / "A"
+    b = project / "B"
+    a.mkdir()
+    b.mkdir()
+    run_live(a, "run", "-n", "in-A", "--", "sh", "-c", "echo a")
+
+    out = run_live(b, "ls", "-a", "-C", str(a), "--json")
+    assert "in-A" in _ls_names(out.stdout)
+
+
+def test_cat_cwd_flag_scopes_to_other_dir(project: Path, run_live) -> None:
+    a = project / "A"
+    b = project / "B"
+    a.mkdir()
+    b.mkdir()
+    run_live(a, "run", "-n", "elsewhere", "--", "sh", "-c", "echo hi")
+
+    hit = run_live(b, "cat", "-C", str(a), "elsewhere")
+    assert "hi" in hit.stdout
+
+
+def test_run_cwd_flag_runs_and_scopes_there(project: Path, run_live) -> None:
+    """`run -C A` runs the child in A and records A as the session's scope."""
+    a = project / "A"
+    b = project / "B"
+    a.mkdir()
+    b.mkdir()
+    run_live(b, "run", "-n", "via-C", "-C", str(a), "--", "pwd")
+
+    # Scoped to A, not to the invoking directory B.
+    assert "via-C" in _ls_names(run_live(a, "ls", "-a", "--json").stdout)
+    assert run_live(b, "ls", "-a", "--json").stdout.strip() == ""
+
+    # The child actually ran in A.
+    cat = run_live(a, "cat", "via-C")
+    assert str(a.resolve()) in cat.stdout
+
+
+def test_run_cwd_flag_missing_dir_errors(project: Path, run_live) -> None:
+    miss = run_live(
+        project, "run", "-C", str(project / "nope"), "--", "sh", "-c", "echo hi",
+        check=False,
+    )
+    assert miss.returncode == 2
+    assert "no such directory" in miss.stderr
+
+
+def test_cwd_and_global_flags_conflict(project: Path, run_live) -> None:
+    out = run_live(project, "ls", "-g", "-C", str(project), check=False)
+    assert out.returncode == 2
+
+
+def test_cwd_flag_rejects_empty_value(project: Path, run_live) -> None:
+    """`-C ""` (e.g. an unset shell variable) must error, not silently
+    resolve to the invoking directory."""
+    miss = run_live(
+        project, "run", "-C", "", "--", "sh", "-c", "echo hi", check=False
+    )
+    assert miss.returncode == 2
+    assert "expected a directory path" in miss.stderr
+
+    out = run_live(project, "ls", "-C", "", check=False)
+    assert out.returncode == 2
 
 
 def test_rm_respects_scope(project: Path, run_live) -> None:

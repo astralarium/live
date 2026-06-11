@@ -1,8 +1,5 @@
-"""Sanity checks for `live completion <shell>` payloads.
-
-Verifies each shell's script: emits non-empty content, mentions our verbs,
-references the per-shell completion hookup mechanism, and writes to stdout.
-"""
+"""Checks for `live completion-script <shell>` payloads and the
+`live completion selectors|cwds` data verbs the payloads consume."""
 
 from __future__ import annotations
 
@@ -11,7 +8,7 @@ from pathlib import Path
 import pytest
 
 
-VERBS = ("run", "ls", "cat", "head", "tail", "less", "rm", "completion")
+VERBS = ("run", "ls", "cat", "head", "tail", "less", "rm", "completion-script")
 
 
 @pytest.mark.parametrize("shell,marker", [
@@ -22,11 +19,52 @@ VERBS = ("run", "ls", "cat", "head", "tail", "less", "rm", "completion")
 def test_completion_payload_contains_shell_hookup(
     shell: str, marker: str, run_live, tmp_path: Path
 ) -> None:
-    out = run_live(tmp_path, "completion", shell).stdout
+    out = run_live(tmp_path, "completion-script", shell).stdout
     assert out, f"{shell}: empty payload"
     assert marker in out, f"{shell}: missing hookup marker {marker!r}"
     for verb in VERBS:
         assert verb in out, f"{shell}: missing verb {verb!r}"
+
+
+def test_completion_selectors_lists_names_and_ids(project: Path, run_live) -> None:
+    """Exited sessions are excluded by default and included with `-a`;
+    both the name and the session id are offered."""
+    run_live(project, "run", "-n", "gone", "--", "sh", "-c", "echo a")
+
+    active = run_live(project, "completion", "selectors").stdout.splitlines()
+    assert "gone" not in active
+
+    everything = run_live(project, "completion", "selectors", "-a").stdout.splitlines()
+    assert "gone" in everything
+    [sid] = [t for t in everything if t != "gone"]
+    assert len(sid) == 36, sid
+
+
+def test_completion_selectors_honors_scope_flags(project: Path, run_live) -> None:
+    a = project / "A"
+    b = project / "B"
+    a.mkdir()
+    b.mkdir()
+    run_live(a, "run", "-n", "in-A", "--", "sh", "-c", "echo a")
+
+    out_of_scope = run_live(b, "completion", "selectors", "-a").stdout.splitlines()
+    assert "in-A" not in out_of_scope
+    scoped = run_live(
+        b, "completion", "selectors", "-a", "-C", str(a)
+    ).stdout.splitlines()
+    assert "in-A" in scoped
+    global_ = run_live(b, "completion", "selectors", "-a", "-g").stdout.splitlines()
+    assert "in-A" in global_
+
+
+def test_completion_cwds_lists_distinct_session_cwds(project: Path, run_live) -> None:
+    a = project / "A"
+    a.mkdir()
+    run_live(a, "run", "--", "sh", "-c", "echo a")
+    run_live(a, "run", "--", "sh", "-c", "echo b")
+
+    out = run_live(project, "completion", "cwds").stdout.splitlines()
+    assert out.count(str(a.resolve())) == 1, out
 
 
 @pytest.mark.parametrize("shell,rel", [
