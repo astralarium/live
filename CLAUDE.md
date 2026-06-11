@@ -1,6 +1,11 @@
-# Comments
+## Git
 
-Document API interfaces.
+Do not stage or commit changes. The user will manually review.
+
+## Comments
+
+Keep comments tight and concise.
+Document API interfaces and expectations.
 Minimal section markers are okay.
-Extra comments should only be added if the code is not self-explanatory.
-DO NOT mention historical cruft.
+Only add extra comments if the code is not self-explanatory.
+DO NOT mention historical cruft or change history.
