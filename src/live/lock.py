@@ -1,9 +1,14 @@
 """flock-based liveness primitives.
 
 Recorder holds an exclusive flock on `process.lock` for its lifetime.
-Probes try LOCK_EX | LOCK_NB on a fresh fd and close immediately:
+Probes try LOCK_SH | LOCK_NB on a fresh fd and close immediately:
   - acquired (success) -> recorder is dead
   - EAGAIN/EWOULDBLOCK -> recorder is alive
+
+Probes take SH, not EX, so concurrent probes of a dead session never contend
+with each other — only the recorder's EX reads as alive. An EX probe would
+flash-hold the lock and make a racing probe misreport a dead session as
+running (and `stop` would then signal a stale, possibly recycled pid).
 """
 
 from __future__ import annotations
@@ -33,7 +38,10 @@ def acquire_lock(lock_path: Path, pid: int) -> int:
 
 
 def probe_held(lock_path: Path) -> bool | None:
-    """Probe the lock without holding it.
+    """Probe the lock without holding it exclusively.
+
+    SH coexists with other probes, so only the recorder's EX reads as held —
+    concurrent probes can't make each other misreport a dead session.
 
     Returns:
       True  - lock is held by some live process (recorder running/hung)
@@ -46,7 +54,7 @@ def probe_held(lock_path: Path) -> bool | None:
         return None
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
             return True
         # We got the lock -> recorder is gone. Release before closing.

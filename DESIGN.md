@@ -82,7 +82,7 @@ Scope is a filter on `meta.cwd` (symlinks resolved).
 
 ## Invariants
 
-- **Single writer, lock = liveness.** Recorder holds the `flock` for its lifetime. Probe with non-blocking `LOCK_EX`: success = recorder is gone.
+- **Single writer, lock = liveness.** Recorder holds the `flock` (`LOCK_EX`) for its lifetime. Probe with non-blocking `LOCK_SH`: success = recorder is gone. Probes take SH so they never contend with each other — only the recorder's EX reads as alive, so racing probes can't misreport a dead session as running.
 - **Prefix invariant.** Stream is always one complete line ahead of, or equal to, the index — never the inverse. Crash leaves an unindexed complete line; sweepers stamp it `inconsistent`.
 - **Hard cap.** Closed segments are exactly `segmentKb` — rotation lands mid-line, so a line may span segments and readers locate lines by idx byte offsets, never by per-segment newline counting. Retention runs on every rotation and keeps retained bytes ≤ `maxKb` + one segment, unconditionally: a line wider than the cap is head-truncated rather than retained whole, and output with no newlines at all is bounded the same way.
 - **Absolute line numbers.** `n` is monotonic across the session's lifetime. Retention deletes but never renumbers; cursors past the oldest retained line get a `dropped` notice.

@@ -3,6 +3,7 @@ resolution, name-lock acquisition, and the polling watcher backend."""
 
 from __future__ import annotations
 
+import fcntl
 import os
 import signal
 import time
@@ -29,7 +30,7 @@ from live.session import (
     resolve_many,
     resolve_one,
 )
-from live.lock import HeldLock, LockTimeout
+from live.lock import HeldLock, LockTimeout, acquire_lock, probe_held
 from live.watcher import _PollWatcher
 
 
@@ -222,6 +223,43 @@ def test_last_idx_record_header_only(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
     p.write_bytes(b"\x00" * 16)
     assert last_idx_record(p) is None
+
+
+# ----- lock probing -----
+
+
+def test_probe_held_missing_file_is_none(tmp_path: Path) -> None:
+    assert probe_held(tmp_path / "process.lock") is None
+
+
+def test_probe_held_unheld_file_is_false(tmp_path: Path) -> None:
+    lock = tmp_path / "process.lock"
+    lock.write_text("12345\n")
+    assert probe_held(lock) is False
+
+
+def test_probe_held_exclusive_holder_is_true(tmp_path: Path) -> None:
+    # Simulate a live recorder: hold LOCK_EX while probing.
+    lock = tmp_path / "process.lock"
+    fd = acquire_lock(lock, 12345)
+    try:
+        assert probe_held(lock) is True
+    finally:
+        os.close(fd)
+    assert probe_held(lock) is False
+
+
+def test_probe_held_ignores_concurrent_probe(tmp_path: Path) -> None:
+    """A racing probe (transient LOCK_SH holder) must not make a dead
+    session read as alive — probes contend only with the recorder's EX."""
+    lock = tmp_path / "process.lock"
+    lock.write_text("12345\n")
+    fd = os.open(str(lock), os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        assert probe_held(lock) is False
+    finally:
+        os.close(fd)
 
 
 # ----- selector resolution -----
