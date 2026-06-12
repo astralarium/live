@@ -6,7 +6,7 @@
 
 ## Git
 
-Do not stage or commit changes. The user will manually review.
+Do not stage, unstage, or commit changes. The user will take those actions.
 
 ## Comments
 
