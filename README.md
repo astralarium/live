@@ -55,7 +55,7 @@ live tail -f server  # follow logs
 ```
 
 Select by name (newest match) or UUID prefix.
-Commands are scoped the current directory (and descendants); pass `-C PATH` to scope directory, or `-g` for global scope.
+Commands are scoped to the current directory (and descendants); pass `-C PATH` to scope another directory, or `-g` for global scope.
 
 Stop and clean up:
 

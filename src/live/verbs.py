@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .ansi import strip_ansi
 from .config import Config, load_config
+from .format import LOCK_NAME
 from .lock import HeldLock, kill_pid, probe_held, read_lock_pid
 from .reader import (
     ReadResult,
@@ -56,7 +57,6 @@ def _err(msg: str) -> None:
 def _emit_read_result(
     result: ReadResult,
     info: SessionInfo,
-    cfg: Config,
     *,
     verbose: bool,
     strip: bool,
@@ -204,8 +204,6 @@ def cmd_ls(args) -> int:
                     "cwd": s.meta.cwd,
                     "command": s.meta.command,
                     "path": str(s.path),
-                    "firstSegment": s.watermarks.first_segment,
-                    "lastSegment": s.watermarks.last_segment,
                     "firstLine": s.watermarks.first_line,
                     "lastLine": s.watermarks.last_line,
                     "firstByte": s.watermarks.first_byte,
@@ -288,7 +286,7 @@ def cmd_cat(args) -> int:
         explicit_raw=args.raw,
         stdout_is_tty=sys.stdout.isatty(),
     )
-    _emit_read_result(result, info, cfg, verbose=args.verbose, strip=strip)
+    _emit_read_result(result, info, verbose=args.verbose, strip=strip)
     return 0
 
 
@@ -321,7 +319,7 @@ def cmd_head(args) -> int:
         explicit_raw=args.raw,
         stdout_is_tty=sys.stdout.isatty(),
     )
-    _emit_read_result(result, info, cfg, verbose=args.verbose, strip=strip)
+    _emit_read_result(result, info, verbose=args.verbose, strip=strip)
     return 0
 
 
@@ -340,7 +338,6 @@ def cmd_tail(args) -> int:
     is_time_cursor = args.time is not None
     # Mutual exclusivity (-n / -c / -t) is enforced by argparse.
 
-    verbose = args.verbose
     if is_line_cursor:
         result = lines_since(info.path, from_line=n_val)
         # Caught-up polls (n_val == next-line) are silent. Warn only when the
@@ -391,7 +388,7 @@ def cmd_tail(args) -> int:
             strip=strip,
         )
 
-    _emit_read_result(result, info, cfg, verbose=verbose, strip=strip)
+    _emit_read_result(result, info, verbose=args.verbose, strip=strip)
     return 0
 
 
@@ -520,17 +517,10 @@ def cmd_stop(args) -> int:
     return 1 if any_error else 0
 
 
-def _stop_recorder(info: SessionInfo) -> None:
-    """SIGTERM the recorder; SIGKILL if the flock isn't released in time."""
-    _stop_recorders([info])
-
-
 def _stop_recorders(infos: list[SessionInfo]) -> None:
     """SIGTERM each recorder; SIGKILL any whose flock isn't released within
     STOP_KILL_DEADLINE_SEC. One shared deadline, so N stuck sessions cost
     one wait, not N."""
-    from .format import LOCK_NAME
-
     pending: list[tuple[Path, int]] = []
     for info in infos:
         lock_path = info.path / LOCK_NAME
@@ -559,13 +549,11 @@ def _stop_recorders(infos: list[SessionInfo]) -> None:
 
 def _delete_session(info: SessionInfo, *, force: bool) -> None:
     """Delete a session directory. If running and force=True, kill the recorder."""
-    from .format import LOCK_NAME
-
     lock_path = info.path / LOCK_NAME
     if probe_held(lock_path) is True:
         if not force:
             raise RuntimeError(f"session {info.id[:8]} is running (use -f)")
-        _stop_recorder(info)
+        _stop_recorders([info])
     shutil.rmtree(info.path, ignore_errors=True)
 
 

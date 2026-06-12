@@ -21,6 +21,7 @@ from .format import (
     idx_record_count,
     list_segments,
     read_meta,
+    stamp_dead,
     stream_name,
 )
 from .lock import probe_held
@@ -67,19 +68,6 @@ def _verdict_inconsistent(session_dir: Path) -> bool:
     return stream_lines != idx_lines
 
 
-def _stamp_dead(dead_path: Path, *, inconsistent: bool) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    try:
-        fd = os.open(str(dead_path), flags, 0o600)
-        try:
-            if inconsistent:
-                os.write(fd, INCONSISTENT_MARKER)
-        finally:
-            os.close(fd)
-    except FileExistsError:
-        pass
-
-
 def sweep_one(session_dir: Path, cfg: Config) -> None:
     """Stamp deadAt for dead-but-unmarked sessions; delete TTL-expired ones."""
     lock_path = session_dir / LOCK_NAME
@@ -92,7 +80,7 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
     dead = session_dir / DEAD_NAME
     if not dead.exists():
         try:
-            _stamp_dead(dead, inconsistent=_verdict_inconsistent(session_dir))
+            stamp_dead(session_dir, inconsistent=_verdict_inconsistent(session_dir))
         except FileNotFoundError:
             return
 
@@ -153,7 +141,7 @@ def status_of(session_dir: Path, cfg: Config) -> str:
     # Dead. Look at deadAt verdict.
     payload = _read_deadat(dead)
     if payload is None:
-        # No deadAt yet; sweep will stamp soon. Treat as inconsistent observer.
+        # Not stamped yet; a sweep will write the verdict soon.
         return "exited"
     if payload.strip() == INCONSISTENT_MARKER.strip():
         return "inconsistent"

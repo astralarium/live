@@ -3,7 +3,7 @@
 Index format: 16-byte header (`>QQ` lifetime byte offset of segment start,
 lifetime byte offset where the line containing the segment's first byte
 began — equal when the segment starts at a line boundary), then append-only
-24-byte records (`>Qdq` line number / timestamp / lifetime byte offset of
+24-byte records (`>QdQ` line number / timestamp / lifetime byte offset of
 line's first byte). All integers big-endian; timestamps are seconds since
 epoch.
 
@@ -31,7 +31,7 @@ INCONSISTENT_MARKER = b"inconsistent\n"
 
 IDX_HEADER = struct.Struct(">QQ")
 IDX_HEADER_SIZE = IDX_HEADER.size
-IDX_RECORD = struct.Struct(">Qdq")
+IDX_RECORD = struct.Struct(">QdQ")
 IDX_RECORD_SIZE = IDX_RECORD.size
 
 _STREAM_RE = re.compile(r"^stream\.(\d+)\.log$")
@@ -109,6 +109,21 @@ def read_meta(session_dir: Path) -> Meta | None:
             return Meta.from_dict(json.load(f))
     except (FileNotFoundError, ValueError, KeyError):
         return None
+
+
+def stamp_dead(session_dir: Path, *, inconsistent: bool) -> None:
+    """Create deadAt with O_EXCL; losing the race to another stamper is fine.
+    Content carries the verdict; mtime is the TTL clock."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        fd = os.open(str(session_dir / DEAD_NAME), flags, 0o600)
+        try:
+            if inconsistent:
+                os.write(fd, INCONSISTENT_MARKER)
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        pass
 
 
 def _read_header(idx_path: Path) -> tuple[int, int] | None:
@@ -224,8 +239,6 @@ def last_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
 
 @dataclass(frozen=True)
 class Watermarks:
-    first_segment: int
-    last_segment: int
     first_line: int  # first fully-retained line; 0 if none
     last_line: int  # 0 if no records
     first_byte: int  # 0 if no segments
@@ -236,7 +249,7 @@ class Watermarks:
 def compute_watermarks(session_dir: Path) -> Watermarks:
     segs = list_segments(session_dir)
     if not segs:
-        return Watermarks(0, 0, 0, 0, 0, 0, 0)
+        return Watermarks(0, 0, 0, 0, 0)
 
     first_byte = read_segment_start(session_dir / idx_name(segs[0])) or 0
 
@@ -272,7 +285,7 @@ def compute_watermarks(session_dir: Path) -> Watermarks:
     )
 
     count = last_n - first_n + 1 if first_n else 0
-    return Watermarks(segs[0], segs[-1], first_n, last_n, first_byte, last_byte, count)
+    return Watermarks(first_n, last_n, first_byte, last_byte, count)
 
 
 def read_idx_records(idx_path: Path) -> list[tuple[int, float, int]]:

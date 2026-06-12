@@ -29,12 +29,11 @@ from .config import Config
 from .format import (
     IDX_HEADER,
     IDX_RECORD,
-    INCONSISTENT_MARKER,
-    Meta,
-    DEAD_NAME,
     LOCK_NAME,
+    Meta,
     idx_name,
     list_segments,
+    stamp_dead,
     stream_name,
     write_meta_atomic,
 )
@@ -118,10 +117,10 @@ class _Recorder:
         """Create dir + lock + stream/idx + meta before any reader can see them."""
         self.dir.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.lock_fd = acquire_lock(self.dir / LOCK_NAME, os.getpid())
-        self._open_active_segment(0, create=True)
+        self._open_active_segment(0)
         write_meta_atomic(self.dir, self.meta)
 
-    def _open_active_segment(self, seg: int, *, create: bool) -> None:
+    def _open_active_segment(self, seg: int) -> None:
         if self.stream_fd >= 0:
             try:
                 os.close(self.stream_fd)
@@ -449,10 +448,7 @@ class _Recorder:
             )
             self.line_counter += 1
             n = self.line_counter
-            try:
-                self._write_all(self.idx_fd, IDX_RECORD.pack(n, t, line_start_byte))
-            except OSError:
-                raise
+            self._write_all(self.idx_fd, IDX_RECORD.pack(n, t, line_start_byte))
             self.last_idx_touch = time.time()
             self.pending_line_start = None
             self.pending_line_start_byte = None
@@ -466,8 +462,7 @@ class _Recorder:
             n += os.write(fd, view[n:])
 
     def _rotate(self) -> None:
-        next_seg = self.active_seg + 1
-        self._open_active_segment(next_seg, create=True)
+        self._open_active_segment(self.active_seg + 1)
         self._retain()
 
     def _retain(self) -> None:
@@ -526,17 +521,9 @@ class _Recorder:
             pass
 
     def _stamp_dead(self, *, inconsistent: bool) -> None:
-        """Create deadAt (O_EXCL) BEFORE releasing the lock fd."""
-        dead = self.dir / DEAD_NAME
+        """Create deadAt BEFORE releasing the lock fd (graceful-exit ordering)."""
         try:
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            fd = os.open(str(dead), flags, 0o600)
-            if inconsistent:
-                os.write(fd, INCONSISTENT_MARKER)
-            os.close(fd)
-        except FileExistsError:
-            # A sweeper raced us; harmless.
-            pass
+            stamp_dead(self.dir, inconsistent=inconsistent)
         finally:
             if self.lock_fd >= 0:
                 os.close(self.lock_fd)

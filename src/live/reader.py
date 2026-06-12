@@ -440,13 +440,37 @@ def head_first(
     N=10 to match Unix `head`. `last_line` is the last fully-emitted line;
     `tail -vn +<L+1>` resumes from there.
     """
+    return _head(session_dir, n_lines=n_lines, c_bytes=c_bytes, drop_last=False)
+
+
+def head_drop_last(
+    session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
+) -> ReadResult:
+    """GNU `head -n -K` / `-c -K`: emit everything except the last K lines (or
+    K bytes). Partial-line tail excluded."""
+    return _head(session_dir, n_lines=n_lines, c_bytes=c_bytes, drop_last=True)
+
+
+def _head(
+    session_dir: Path,
+    *,
+    n_lines: int | None,
+    c_bytes: int | None,
+    drop_last: bool,
+) -> ReadResult:
+    """Emit full lines (or bytes) from the floor; `drop_last` flips the end
+    of the range from "first K" to "all but the last K"."""
     view = load_stream_view(session_dir)
     last_time = last_time_of(session_dir)
     first_line = view.first_line
     available = view.last_line - first_line + 1 if first_line else 0
 
     if c_bytes is not None:
-        end = min(view.base + max(c_bytes, 0), view.last_end)
+        k = max(c_bytes, 0)
+        if drop_last:
+            end = max(view.last_end - k, view.base)
+        else:
+            end = min(view.base + k, view.last_end)
         start = view.base
         body = view.slice(start, end)
         # Last full line wholly inside the body.
@@ -458,55 +482,11 @@ def head_first(
                 n += 1
         next_byte = view.base + len(body)
     else:
-        keep = 10 if n_lines is None else n_lines
-        emitted = min(max(keep, 0), available)
-        start, end = (
-            _full_line_span(view, first_line, emitted) if first_line else (view.base, view.base)
-        )
-        body = view.slice(start, end)
-        last_line = first_line + emitted - 1 if (first_line and emitted) else 0
-        next_byte = end
-    dropped, head_dropped, stderr_lines = _floor_check(view, 0, 1, start, body)
-
-    return ReadResult(
-        stdout=body,
-        stderr_lines=stderr_lines,
-        first_emitted=first_line if last_line else 0,
-        last_line=last_line,
-        last_time=last_time,
-        next_byte=next_byte,
-        dropped=dropped,
-        first_line=first_line,
-        partial_bytes=0,
-        partial_age=0.0,
-        emitted_byte=next_byte,
-        dropped_first_bytes=head_dropped,
-    )
-
-
-def head_drop_last(
-    session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
-) -> ReadResult:
-    """GNU `head -n -K` / `-c -K`: emit everything except the last K lines (or
-    K bytes). Partial-line tail excluded."""
-    view = load_stream_view(session_dir)
-    last_time = last_time_of(session_dir)
-    first_line = view.first_line
-    available = view.last_line - first_line + 1 if first_line else 0
-
-    if c_bytes is not None:
-        end = max(view.last_end - max(c_bytes, 0), view.base)
-        start = view.base
-        body = view.slice(start, end)
-        last_line = 0
-        if first_line:
-            n = first_line
-            while n <= view.last_line and view.end_of(n) <= end:
-                last_line = n
-                n += 1
-        next_byte = view.base + len(body)
-    else:
-        emitted = max(available - (n_lines or 0), 0)
+        if drop_last:
+            emitted = max(available - (n_lines or 0), 0)
+        else:
+            keep = 10 if n_lines is None else n_lines
+            emitted = min(max(keep, 0), available)
         start, end = (
             _full_line_span(view, first_line, emitted) if first_line else (view.base, view.base)
         )

@@ -143,7 +143,7 @@ def _mk_info(status: str, exit_code: int | None) -> SessionInfo:
         path=Path("/x"),
         meta=Meta(id="x", command=["sh"], cwd="/", started_at=0.0),
         status=status,
-        watermarks=Watermarks(0, 0, 0, 0, 0, 0, 0),
+        watermarks=Watermarks(0, 0, 0, 0, 0),
         last_activity=0.0,
         exited_at=None,
         exit_code=exit_code,

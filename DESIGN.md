@@ -10,7 +10,7 @@ Python 3.10+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, 
 
 | Verb                                                                               | Purpose                                                                                                                                               |
 | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `live run [-d] [-n NAME] [--geometry CxR] [--] <cmd…>`                             | Run `<cmd>` under a PTY; record. `-d` detaches (survives shell exit) and prints the session id. `--geometry` pins the PTY size (`COLSxROWS`; default: the terminal's size, else 80x24). NAME is `[A-Za-z0-9._-]` (no leading `-`); it errors if already running in an ancestor or descendant cwd — any scope that would see both — while siblings/disjoint dirs may share a name. Only in-scope conflicts hint `live stop`; an ancestor's run is out of scope from below. The conflict check and session creation hold a global name lock, so concurrent named runs can't race past it. |
+| `live run [-d] [-n NAME] [--geometry CxR] [--] <cmd…>`                             | Run `<cmd>` under a PTY; record. `-d` detaches (survives shell exit) and prints the session id. `--geometry` pins the PTY size (`COLSxROWS`; default: the terminal's size, else 80x24). |
 | `live ls [-a] [-g] [--json] [SELECTOR]`                                            | List sessions in scope; `SELECTOR` filters by NAME or UUID-prefix.                                                                                    |
 | `live cat [-v] [-g] [--strip-ansi\|--raw] <SELECTOR>`                              | Concatenate session.                                                                                                                                  |
 | `live head [-v] [-g] [-n N\|-c K\|-t T] <SELECTOR>`                                | `-n N` first N lines (default 10; `-N` drops last N), `-c K` first K bytes (`-K` drops last K), `-t T` lines with idx `t <= T` (T: epoch seconds, duration like `30m` for now − 30m, or ISO datetime). |
@@ -23,7 +23,9 @@ Python 3.10+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, 
 | `live completion-script <bash\|zsh\|fish>`                                         | Print shell completion script.                                                                                                                        |
 | `live update-shell [SHELL]`                                                        | Install completion for `$SHELL` (or override).                                                                                                        |
 
-`live <verb> -h` for full flag details. `-g` widens scope from cwd-and-below to all sessions. ANSI: default strips when stdout isn't a TTY; `--strip-ansi` / `--raw` override.
+`live <verb> -h` for full flag details. Scope defaults to cwd-and-below; `-C PATH` re-roots it (for `run`: also the child's working directory), `-g` lifts it. ANSI: default strips when stdout isn't a TTY; `--strip-ansi` / `--raw` override.
+
+NAME is `[A-Za-z0-9._-]` (no leading `-`). `run -n` errors if NAME is already running in an ancestor or descendant cwd — any scope that would see both — while siblings/disjoint dirs may share a name. Only in-scope conflicts hint `live stop`; an ancestor's run is out of scope from below. The conflict check and session creation hold a global name lock, so concurrent named runs can't race past it.
 
 Exit codes: `0` success; `1` runtime error; `2` usage error (bad flag, missing session, ambiguous selector).
 
@@ -46,13 +48,21 @@ live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>
 
 `<N>` and `<B>` are resume cursors — plug straight into `tail -n +N` or `tail -c +B` to read what's been written since. Reset to `0` when `<uuid>` changes. `<T>` (active stream mtime, partial-bytes-aware since heartbeats only touch idx) is the alternate for `tail -t T`. `<B>` is a lifetime byte offset that survives segment rotation.
 
-Possible preceding lines, in order: `dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)` (gap — at most one per read; either clause may drop out with its key pair; the byte clause spans `[from-byte, first-byte)` — for line reads, the missing beginning of the first emitted line), `from-line=<N> > next-line=<N>; check id` / `from-time=<T> > last-time=<T>; check id` / `from-byte=<B> > next-byte=<B>; check id` (cursor ahead), `partial-line bytes=<k> age=<s>`, `status=hung last-activity=<s>`, `exit=inconsistent`, `exit-code=<N>`. The last two can co-appear if the recorder wrote meta before a sweeper observed a torn recording.
+Possible preceding lines, in order:
+
+- `dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)` — gap; at most one per read. Either clause may drop out with its key pair; the byte clause spans `[from-byte, first-byte)` — for line reads, the missing beginning of the first emitted line.
+- `from-line=<N> > next-line=<N>; check id` (or the `from-time` / `from-byte` analogues) — cursor ahead of the stream.
+- `partial-line bytes=<k> age=<s>` — unterminated tail (e.g. a progress bar).
+- `status=hung last-activity=<s>` — alive but stalled.
+- `exit=inconsistent`, `exit-code=<N>` — session is done. Both can appear if the recorder wrote meta before a sweeper observed a torn recording.
 
 ## On-disk layout
 
 ```
 ~/.live/
   config.json
+  state.json          # sweep throttle stamp
+  name.lock           # serializes named-run conflict check + creation
   sessions/
     <uuid>/
       meta.json         # session metadata; writer-only, replaced atomically
@@ -61,12 +71,12 @@ Possible preceding lines, in order: `dropped <j> lines + <k> bytes (from-line=<N
       stream.NNNN.log   # raw PTY bytes
       lines.NNNN.idx    # binary line index: 16-byte header (>QQ segment start byte,
                         # start byte of the line open at that point) then 24-byte
-                        # records (>Qdq: n, t, line start byte), one per line
+                        # records (>QdQ: n, t, line start byte), one per line
 ```
 
 The recorder appends to the highest-numbered pair; frozen segments are immutable until retention unlinks them. Session IDs are UUIDv4; chronological order comes from `meta.startedAt`.
 
-Scope is a filter on `meta.cwd`: read verbs default to cwd-or-descendant (symlinks resolved); `-g` widens.
+Scope is a filter on `meta.cwd` (symlinks resolved).
 
 ## Invariants
 
@@ -75,7 +85,7 @@ Scope is a filter on `meta.cwd`: read verbs default to cwd-or-descendant (symlin
 - **Hard cap.** Closed segments are exactly `segmentKb` — rotation lands mid-line, so a line may span segments and readers locate lines by idx byte offsets, never by per-segment newline counting. Retention runs on every rotation and keeps retained bytes ≤ `maxKb` + one segment, unconditionally: a line wider than the cap is head-truncated rather than retained whole, and output with no newlines at all is bounded the same way.
 - **Absolute line numbers.** `n` is monotonic across the session's lifetime. Retention deletes but never renumbers; cursors past the oldest retained line get a `dropped` notice.
 - **Heartbeat.** Recorder advances the active idx mtime every `heartbeatSec`. Staleness past `3 × heartbeatSec` while the lock is held = `hung`.
-- **Sweep on every read.** Each verb that touches sessions stamps dead-but-unmarked ones (exclusive create of `deadAt`) and deletes those past `ttlDays`. Negative `ttlDays` disables the delete pass. Races are safe.
+- **Opportunistic sweep.** Every verb invocation triggers a sweep — throttled to once an hour via `state.json` — that stamps dead-but-unmarked sessions (exclusive create of `deadAt`) and deletes those past `ttlDays`. Negative `ttlDays` disables the delete pass. Races are safe.
 - **Graceful exit ordering.** `meta.json` → `deadAt` → unlock, in that order, so no sweeper races in with a wrong verdict.
 - **Signals.** `SIGWINCH` propagates window size (unless `--geometry` pinned it). `SIGTERM`/`SIGHUP` forward to the child; if the child hasn't exited 3s later, the recorder SIGKILLs its process group so a TERM-ignoring command can't outlive its session. `SIGINT` forwards only when stdin isn't a TTY (otherwise line discipline routes ^C directly). `live run` exits with the child's code, or `128 + signum` if signal-killed.
 - **Detach.** `run -d` forks the recorder under `setsid` with fds on `/dev/null` — no controlling TTY, so shell exit can't reach it — and returns once the session dir + lock exist (the printed id is immediately visible to `ls`). The child PTY gets 80x24 unless `--geometry` says otherwise. `stop` SIGTERMs via the lock-file pid; the recorder's graceful-exit ordering still applies, and its kill escalation beats `stop`'s 5s SIGKILL deadline.

@@ -189,7 +189,7 @@ def _stub(id_: str, name: str | None = None) -> SessionInfo:
         path=Path(f"/sessions/{id_}"),
         meta=Meta(id=id_, command=["sh"], cwd="/", started_at=0.0, name=name),
         status="exited",
-        watermarks=Watermarks(0, 0, 0, 0, 0, 0, 0),
+        watermarks=Watermarks(0, 0, 0, 0, 0),
         last_activity=0.0,
         exited_at=None,
         exit_code=None,
