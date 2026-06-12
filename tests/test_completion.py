@@ -46,17 +46,36 @@ def test_older_than_value_slot_stays_owned(run_live, tmp_path: Path) -> None:
     assert "-l older-than -r" in fish
 
 
-def test_completion_selectors_lists_names_and_ids(project: Path, run_live) -> None:
+def test_completion_selectors_prefer_names_over_ids(
+    project: Path, run_live, wait_for_session
+) -> None:
     """Exited sessions are excluded by default and included with `-a`;
-    both the name and the session id are offered."""
+    ids are offered only when no name matches the typed prefix."""
     run_live(project, "run", "-n", "gone", "--", "sh", "-c", "echo a")
+    sid = wait_for_session().name
 
     active = run_live(project, "completion", "selectors").stdout.splitlines()
     assert "gone" not in active
 
-    everything = run_live(project, "completion", "selectors", "-a").stdout.splitlines()
-    assert "gone" in everything
-    [sid] = [t for t in everything if t != "gone"]
+    def selectors(*args: str) -> list[str]:
+        return run_live(
+            project, "completion", "selectors", "-a", *args
+        ).stdout.splitlines()
+
+    # While a name matches, the id stays hidden.
+    assert selectors() == ["gone"]
+    assert selectors("--", "go") == ["gone"]
+    # No name matches: fall back to ids.
+    assert selectors("--", sid[:8]) == [sid]
+    assert selectors("--", "zzz") == []
+
+
+def test_completion_selectors_list_ids_for_unnamed_sessions(
+    project: Path, run_live
+) -> None:
+    run_live(project, "run", "--", "sh", "-c", "echo a")
+
+    [sid] = run_live(project, "completion", "selectors", "-a").stdout.splitlines()
     assert len(sid) == 36, sid
 
 

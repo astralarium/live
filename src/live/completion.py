@@ -2,9 +2,10 @@
 
 Each script offers verb completion, per-verb flag completion, selector
 completion, and `live run <TAB>` handoff to the wrapped command's completion.
-Candidates come from the plumbing verbs `live completion selectors` (names +
-ids, scoped like `ls`) and `live completion cwds` (session cwds), one per
-line — no output parsing in the scripts. The selector helper mirrors the
+Candidates come from the plumbing verbs `live completion selectors` (names
+matching the typed prefix, ids only when no name matches; scoped like `ls`)
+and `live completion cwds` (session cwds), one per line — no output parsing
+in the scripts. The selector helper mirrors the
 verb's scope flags: `ls` only suggests active sessions unless `-a` was typed;
 the read verbs (`cat`/`head`/`tail`/`less`/`rm`) always pass `-a` since exited
 sessions remain valid targets; `stop` only suggests active sessions. `-g`
@@ -181,7 +182,8 @@ _live_reply_lines() {
 
 # Selector completion; arguments (`-a`) plus any typed scope flag
 # (`-g`, or `-C <dir>`, clustered or attached) are forwarded to
-# `live completion selectors`.
+# `live completion selectors`, along with the typed prefix so ids are
+# offered only when no name matches.
 _live_complete_selectors() {
     local -a sel_args=("$@")
     local i j w cluster
@@ -211,7 +213,7 @@ _live_complete_selectors() {
         esac
     done
     COMPREPLY=()
-    _live_reply_lines < <(live completion selectors "${sel_args[@]}" 2>/dev/null)
+    _live_reply_lines < <(live completion selectors "${sel_args[@]}" -- "$cur" 2>/dev/null)
 }
 
 # `-C` value completion: cwds of recorded sessions; plain directories only
@@ -359,6 +361,7 @@ _live_verbs() {
 # was typed; `stop` only suggests active sessions; other verbs always include
 # exited (still valid targets). Honors -g/--global and -C/--cwd when present
 # in the command line, clustered (`-ag`, `-aC <dir>`) or attached (`-C<dir>`).
+# `$PREFIX` is forwarded so ids are offered only when no name matches.
 _live_selectors() {
     local -a sel_args names
     local i cluster want_all=0 want_global=0
@@ -390,7 +393,7 @@ _live_selectors() {
         *) sel_args+=(-a) ;;
     esac
     (( want_global )) && sel_args+=(-g)
-    names=( ${(f)"$(live completion selectors $sel_args 2>/dev/null)"} )
+    names=( ${(f)"$(live completion selectors $sel_args -- "$PREFIX" 2>/dev/null)"} )
     (( $#names )) && _values 'selector' "${names[@]}"
 }
 
@@ -445,7 +448,8 @@ function __live_selectors
         end
         set i (math $i + 1)
     end
-    live completion selectors $args 2>/dev/null
+    # Forward the typed prefix; ids are offered only when no name matches.
+    live completion selectors $args -- (commandline -ct) 2>/dev/null
 end
 
 # `-C` value completion: cwds of recorded sessions; plain directories only

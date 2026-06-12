@@ -465,6 +465,28 @@ def test_bash_ls_completes_only_active_sessions(
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_ids_offered_only_without_name_match(
+    run_live, live_shim, tmp_path: Path, wait_for_session
+) -> None:
+    """The typed prefix is forwarded: while a name matches it, the session id
+    stays hidden; a prefix matching no name falls back to ids."""
+    test_env = live_shim
+    run_live(tmp_path, "run", "-n", "named", "--", "sh", "-c", "echo a")
+    sid = wait_for_session().name
+    payload = _payload(run_live, tmp_path, "bash")
+
+    def drive(words: tuple[str, ...], cword: int) -> set[str]:
+        return _drive_bash(payload, words, cword, env=test_env, cwd=tmp_path)
+
+    offered = drive(("live", "rm", ""), cword=2)
+    assert "named" in offered, offered
+    assert sid not in offered, offered
+
+    fallback = drive(("live", "rm", sid[:8]), cword=2)
+    assert fallback == {sid}, fallback
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
 def test_bash_numeric_values_dont_break_selector_completion(
     run_live, live_shim, tmp_path: Path
 ) -> None:

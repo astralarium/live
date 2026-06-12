@@ -362,10 +362,17 @@ def _make_parser() -> argparse.ArgumentParser:
     sel_p = comp_sub.add_parser(
         "selectors",
         help="Session names and ids.",
-        description="Print session names and ids.",
+        description="Print session names matching PREFIX, "
+        "fallback to ids when no name matches.",
         formatter_class=_Formatter,
     )
     sel_p.add_argument("-a", "--all", action="store_true", help="Include exited.")
+    sel_p.add_argument(
+        "prefix",
+        nargs="?",
+        default="",
+        help="Typed prefix; ids offered only when no name matches.",
+    )
     _add_scope_flags(sel_p)
     sel_p.set_defaults(func=verbs.cmd_completion_selectors)
     cwds_p = comp_sub.add_parser(

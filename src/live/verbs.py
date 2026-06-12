@@ -632,18 +632,21 @@ def cmd_llms_txt(args) -> int:
 
 
 def cmd_completion_selectors(args) -> int:
-    """Print selector candidates (names + ids), one per line.
+    """Print selector candidates matching the typed prefix, one per line.
 
-    Plumbing for the shell completion scripts; scoped like `ls`.
+    Names are preferred; session ids are offered only when no name matches
+    the prefix. Plumbing for the shell completion scripts; scoped like `ls`.
     """
     cfg = load_config()
     sweep_all(cfg)
     sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
     if not args.all:
         sessions = [s for s in sessions if s.status in ("running", "hung")]
-    tokens = {s.id for s in sessions} | {
-        s.meta.name for s in sessions if s.meta.name is not None
-    }
+    tokens = {
+        s.meta.name
+        for s in sessions
+        if s.meta.name is not None and s.meta.name.startswith(args.prefix)
+    } or {s.id for s in sessions if s.id.startswith(args.prefix)}
     for token in sorted(tokens):
         print(token)
     return 0
