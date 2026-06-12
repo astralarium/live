@@ -57,9 +57,7 @@ def _anchor(verb: str) -> str:
 def main() -> None:
     top = live_help()
     verbs_ = discover_verbs(top)
-    toc = ["- [`live`](#live)"] + [
-        f"- [`live {v}`](#{_anchor(v)})" for v in verbs_
-    ]
+    toc = ["- [`live`](#live)"] + [f"- [`live {v}`](#{_anchor(v)})" for v in verbs_]
     parts = [
         "# `live` — command reference",
         "",

@@ -1,3 +1,9 @@
+# Development
+
+- Auto-formatter: `uv run ruff format`
+- Linter: `uv run ruff check`
+- Test `uv run pytest -q`
+
 ## Git
 
 Do not stage or commit changes. The user will manually review.

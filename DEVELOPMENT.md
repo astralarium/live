@@ -16,11 +16,22 @@ effect on the next invocation.
 ## Tests
 
 ```sh
-uv pip install pytest
-pytest
+uv run pytest
 ```
 
+`uv run` installs the `dev` dependency group (pytest, ruff) automatically.
 Some completion tests are skipped unless `bash`, `zsh`, and/or `fish` are on `$PATH`.
+
+## Lint & format
+
+The codebase is `ruff format`-clean; the ruff version is pinned in the `dev` group so results are reproducible.
+
+```sh
+uv run ruff format .        # auto-format
+uv run ruff check .         # lint
+```
+
+CI ([`.github/workflows/test.yml`](.github/workflows/test.yml)) gates lint + format and runs the suite on Linux and macOS, Python 3.10–3.13, for every push to `main` and every PR.
 
 ## Reference
 
@@ -34,7 +45,7 @@ python scripts/gen_docs.py
 
 Pushing a `vX.Y.Z` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the sdist and wheel, runs tests, and creates a GitHub Release with the artifacts attached.
 
-1. Bump `version` in [`pyproject.toml`](pyproject.toml).
+1. Bump `__version__` in [`src/live/__init__.py`](src/live/__init__.py) — the single version source; hatchling reads it at build time.
 2. Commit and tag:
 
    ```sh

@@ -27,7 +27,7 @@ Python 3.10+, POSIX-only (Linux, macOS, WSL). Zero runtime deps — PTY, flock, 
 
 NAME is `[A-Za-z0-9._-]` (no leading `-`). `run -n` errors if NAME is already running in an ancestor or descendant cwd — any scope that would see both — while siblings/disjoint dirs may share a name. Only in-scope conflicts hint `live stop`; an ancestor's run is out of scope from below. The conflict check and session creation hold a global name lock, so concurrent named runs can't race past it.
 
-Exit codes: `0` success; `1` runtime error; `2` usage error (bad flag, missing session, ambiguous selector).
+Exit codes: `0` success; `1` runtime error (missing session, ambiguous selector, not running, stop/rm failure); `2` usage error (bad flag or malformed argument). `run` exits with the child's code.
 
 ## Selectors
 

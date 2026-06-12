@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "live-cmd"
-version = "0.3.1"
+dynamic = ["version"]
 description = "Live stream command line output."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,8 +19,14 @@ classifiers = [
 [project.scripts]
 live = "live.cli:main"
 
+[dependency-groups]
+dev = ["pytest", "ruff==0.15.17"]
+
 [project.urls]
 Homepage = "https://github.com/astralarium/live"
+
+[tool.hatch.version]
+path = "src/live/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/live"]
