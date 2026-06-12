@@ -215,13 +215,12 @@ def cmd_ls(args) -> int:
     # Human columns: header + equal-width fields (last column unpadded).
     scope = _scope_filter(args)
     now = time.time()
-    headers = ("ID", "NAME", "STATUS", "AGE", "CWD", "COMMAND")
+    headers = ("ID", "NAME", "STATUS", "CWD", "COMMAND")
     rows = [
         (
             s.id[:8],
             s.meta.name or "-",
             _fmt_status(s, now),
-            fmt_duration(now - s.meta.started_at),
             _cwd_display(s.meta.cwd, scope),
             " ".join(s.meta.command),
         )
@@ -239,9 +238,9 @@ def cmd_ls(args) -> int:
 
 
 def _fmt_status(s: SessionInfo, now: float) -> str:
-    """docker-ps style status: Up 5m / Up 5m (hung) / Exited (0) 2h ago / Dead."""
+    """docker-ps style status: Running 5m / Running 5m (hung) / Exited (0) 2h ago / Dead."""
     if s.status in ("running", "hung"):
-        up = f"Up {fmt_duration(now - s.meta.started_at)}"
+        up = f"Running {fmt_duration(now - s.meta.started_at)}"
         return f"{up} (hung)" if s.status == "hung" else up
     ago = f" {fmt_duration(now - s.exited_at)} ago" if s.exited_at else ""
     if s.status == "exited":
