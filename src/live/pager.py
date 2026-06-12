@@ -258,6 +258,7 @@ class PagerState:
     search_direction: str = "forward"  # "forward" | "backward"
     search_last_match: int | None = None  # index into `lines` of last hit
     prompt_active: bool = False
+    prompt_kind: str = "search"  # "search" | "line"
     prompt_direction: str = "forward"
     prompt_buffer: str = ""
     help_active: bool = False
@@ -449,9 +450,17 @@ class PagerState:
     def start_prompt(self, direction: str) -> None:
         """Enter pattern-entry mode for `/` (forward) or `?` (backward)."""
         self.prompt_active = True
+        self.prompt_kind = "search"
         self.prompt_direction = direction
         self.prompt_buffer = ""
         self.follow = False  # entering a search disables auto-follow
+
+    def start_line_prompt(self) -> None:
+        """Enter line-number entry mode for `:` (`:42` jumps to line 42)."""
+        self.prompt_active = True
+        self.prompt_kind = "line"
+        self.prompt_buffer = ""
+        self.follow = False
 
     def append_prompt(self, ch: str) -> None:
         if self.prompt_active:
@@ -466,14 +475,23 @@ class PagerState:
         self.prompt_buffer = ""
 
     def submit_prompt(self) -> bool:
-        """Execute the entered pattern. Returns True if a match was found."""
-        pattern = self.prompt_buffer
+        """Execute the entered prompt: run the search, or jump to the line.
+        Returns True on a search match or a line jump."""
+        buf = self.prompt_buffer
         direction = self.prompt_direction
         self.prompt_active = False
         self.prompt_buffer = ""
-        if not pattern:
+        if not buf:
             return False
-        return self.search(pattern, direction)
+        if self.prompt_kind == "line":
+            try:
+                n = int(buf)
+            except ValueError:
+                self.set_flash("(invalid line number)")
+                return False
+            self.goto_line(n)
+            return True
+        return self.search(buf, direction)
 
     def search(self, pattern: str, direction: str) -> bool:
         """Find the next match of `pattern` and scroll it to the top of view.
@@ -944,6 +962,7 @@ _HELP_LINES = [
     "    u ^U               Backward half-window (or N lines)",
     "    g  Home            Goto first line     (Ng = goto line N)",
     "    G  End             Goto last line      (NG = goto line N)",
+    "    :N CR              Goto line N",
     "",
     "  SEARCH",
     "",
@@ -1333,6 +1352,8 @@ def _curses_loop(
             state.start_prompt("forward")
         elif ch == ord("?"):
             state.start_prompt("backward")
+        elif ch == ord(":"):
+            state.start_line_prompt()
         elif ch == ord("n"):
             state.search_repeat(reverse=False)
         elif ch == ord("N"):
@@ -1468,7 +1489,10 @@ def _render(
 
     # Bottom row: prompt during search entry, otherwise the status bar.
     if state.prompt_active:
-        prefix = "/" if state.prompt_direction == "forward" else "?"
+        if state.prompt_kind == "line":
+            prefix = ":"
+        else:
+            prefix = "/" if state.prompt_direction == "forward" else "?"
         # Clip and place the cursor by cells, not chars (wide glyphs are 2).
         text, cells = _clip_cells(prefix + state.prompt_buffer, max(0, w - 1))
         try:

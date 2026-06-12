@@ -428,6 +428,47 @@ def test_submit_empty_prompt_is_noop() -> None:
     assert s.search_pattern == ""
 
 
+def test_line_prompt_jumps_to_line() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 21)])
+    s.resize(5)
+    s.start_line_prompt()
+    for ch in "7":
+        s.append_prompt(ch)
+    assert s.submit_prompt()
+    assert not s.prompt_active
+    assert s.lines[s.view_top].n == 7
+
+
+def test_line_prompt_disables_follow() -> None:
+    s = PagerState(lines=[_mk(1)])
+    s.resize(5)
+    s.toggle_follow()
+    assert s.follow is True
+    s.start_line_prompt()
+    assert s.follow is False
+
+
+def test_line_prompt_rejects_non_numeric() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 11)])
+    s.resize(5)
+    s.start_line_prompt()
+    for ch in "4x":
+        s.append_prompt(ch)
+    assert not s.submit_prompt()
+    assert s.view_top == 0
+    assert s.flash_msg == "(invalid line number)"
+
+
+def test_line_prompt_does_not_touch_search_state() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 11)])
+    s.resize(5)
+    assert s.search("x", "forward")
+    s.start_line_prompt()
+    s.append_prompt("9")
+    assert s.submit_prompt()
+    assert s.search_pattern == "x"  # `n` still repeats the last search
+
+
 def test_visible_matches_returns_positions_in_viewport() -> None:
     s = PagerState(
         lines=[
