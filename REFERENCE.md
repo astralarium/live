@@ -259,7 +259,7 @@ This project uses `live`, a CLI streamer.
 See live-cmd skill for detailed usage.
 
 Run detached (survives shell exit; prints session UUID):
-  live run -dn NAME -- <cmd>
+  live run -dn NAME [-C /path/to/dir] -- <cmd>
 
 Stop a running session:
   live stop <SELECTOR>
@@ -284,7 +284,7 @@ stderr: `live` verbose output (-v):
   "live: status=hung last-activity=<s>"
 - tty closed: output detached but child is running
   "live: tty closed; no further output"
-- gap: rotation dropped data
+- gap: retention dropped data
   "live: dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)"
 - partial: partial line (eg. progress bar)
   "live: partial-line bytes=<k> age=<s>"
