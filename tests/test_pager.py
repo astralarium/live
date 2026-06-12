@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import shutil
 import time
@@ -801,3 +802,93 @@ def test_drain_source_applies_lines_before_partial(tmp_path: Path) -> None:
     assert [line.n for line in s.lines] == [1, 2]
     assert s.partial is not None
     assert s.partial.n == 3
+
+
+def test_drain_source_follows_final_lines_before_exit_drops_follow(
+    tmp_path: Path,
+) -> None:
+    # The source queues its final drain before the exit event; the last burst
+    # must scroll into view while follow is still on.
+    source = PagerSource(tmp_path, _CFG, initial_cursor=0)
+    s = PagerState(lines=[_mk(i) for i in range(1, 6)], state_badge="running")
+    s.resize(2)
+    s.toggle_follow()
+    source.queue.put(_mk(6))
+    source.queue.put(_mk(7))
+    source.queue.put(SourceEvent(kind="exit"))
+    _drain_source(source, s)
+    assert s.view_bottom_line().n == 7
+    assert s.state_badge == "exited"
+    assert s.follow is False
+
+
+def test_drain_source_running_event_recovers_hung_badge(tmp_path: Path) -> None:
+    source = PagerSource(tmp_path, _CFG, initial_cursor=0)
+    s = PagerState(lines=[_mk(1)], state_badge="hung")
+    s.resize(5)
+    source.queue.put(_mk(2))
+    source.queue.put(SourceEvent(kind="running"))
+    _drain_source(source, s)
+    assert s.state_badge == "running"
+
+
+# ----- hung is non-terminal for follow -----
+
+
+def test_hung_badge_keeps_follow() -> None:
+    s = PagerState(lines=[_mk(1)], state_badge="running")
+    s.resize(5)
+    s.toggle_follow()
+    s.set_state_badge("hung")
+    assert s.follow is True
+
+
+def test_follow_can_start_while_hung() -> None:
+    s = PagerState(lines=[_mk(1)], state_badge="hung")
+    s.resize(5)
+    s.toggle_follow()
+    assert s.follow is True
+
+
+def _queue_kinds(source: PagerSource) -> list[str]:
+    """Drain the source queue; return the kinds of the SourceEvents on it."""
+    kinds = []
+    while not source.queue.empty():
+        item = source.queue.get_nowait()
+        if isinstance(item, SourceEvent):
+            kinds.append(item.kind)
+    return kinds
+
+
+def test_check_hung_recovers_when_idx_mtime_freshens(tmp_path: Path) -> None:
+    sess = tmp_path / "sess"
+    sess.mkdir()
+    idx = sess / "lines.0000.idx"
+    _write_idx(idx, [(1, 1.0, 0)])
+    source = PagerSource(sess, _CFG, initial_cursor=0)
+
+    # Stale mtime (lock held) -> hung, emitted once.
+    old = time.time() - 4 * _CFG.heartbeat_sec
+    os.utime(idx, (old, old))
+    source._check_hung(0)
+    source._check_hung(0)
+    assert _queue_kinds(source) == ["hung"]
+
+    # Heartbeat freshens the mtime — no new lines needed -> recovery, once.
+    os.utime(idx, None)
+    source._check_hung(0)
+    source._check_hung(0)
+    assert _queue_kinds(source) == ["running"]
+    assert source._hung_emitted is False
+
+
+def test_pager_opened_on_hung_session_emits_recovery(tmp_path: Path) -> None:
+    # `initially_hung` seeds the flag so a session that was already hung at
+    # open recovers as soon as its heartbeat shows up.
+    sess = tmp_path / "sess"
+    sess.mkdir()
+    idx = sess / "lines.0000.idx"
+    _write_idx(idx, [(1, 1.0, 0)])
+    source = PagerSource(sess, _CFG, initial_cursor=0, initially_hung=True)
+    source._check_hung(0)
+    assert _queue_kinds(source) == ["running"]

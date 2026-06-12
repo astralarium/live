@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import unicodedata
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from itertools import groupby
 from pathlib import Path
@@ -230,6 +231,11 @@ def _evict_half(cache: dict[int, _V]) -> None:
 # ----- pure view state -----
 
 
+# Badges of a session that may still produce output. Everything else is
+# terminal (exited, inconsistent, REMOVED) and drops follow.
+LIVE_BADGES = ("running", "hung")
+
+
 @dataclass
 class PagerState:
     """Pager view model. No I/O. All transitions are method calls.
@@ -388,30 +394,32 @@ class PagerState:
         `n` is the recorder line number (Line.n), 1-indexed. Out-of-range
         values clamp to the first/last line in the buffer.
         """
-        count = self._line_count()
-        if not count:
+        if not self._line_count():
             return
-        target = count - 1
-        for i in range(count):
-            if self._line_at(i).n >= n:
-                target = i
-                break
+        # Line numbers ascend with buffer index; past-the-end falls through to
+        # the partial row (when present) or clamps to the last line.
+        target = bisect_left(self.lines, n, key=lambda ln: ln.n)
         self.view_top = max(0, min(self._max_view_top(), target))
         self._update_seen()
 
     def toggle_follow(self) -> None:
-        if not self.follow and self.state_badge != "running":
+        if not self.follow and not self._session_live():
             self.set_flash("(session not running)")
             return
         self.follow = not self.follow
         if self.follow:
             self.goto_end()
 
+    def _session_live(self) -> bool:
+        """True while the recorder may still produce output. A hung session is
+        live — quiet, not gone — so follow stays meaningful through a stall."""
+        return self.state_badge in LIVE_BADGES
+
     def set_state_badge(self, badge: str) -> None:
-        """Update the session-state badge. Leaving 'running' also drops follow,
+        """Update the session-state badge. Terminal badges also drop follow,
         since there's nothing new to follow."""
         self.state_badge = badge
-        if badge != "running":
+        if not self._session_live():
             self.follow = False
 
     def toggle_help(self) -> None:
@@ -734,7 +742,8 @@ class PagerState:
 class SourceEvent:
     """Lifecycle signal from the background source thread.
 
-    `kind`: "exit" | "hung" | "removed".
+    `kind`: "exit" | "hung" | "running" | "removed". "running" is the
+    recovery from "hung": the recorder's heartbeat (or output) resumed.
     """
 
     kind: str
@@ -756,6 +765,7 @@ class PagerSource:
         *,
         initial_cursor: int,
         scan_resume: _ScanCursor | None = None,
+        initially_hung: bool = False,
     ) -> None:
         self.session_dir = session_dir
         self.cfg = cfg
@@ -764,7 +774,9 @@ class PagerSource:
         self._last_partial: tuple[bytes, int] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._hung_emitted = False
+        # Seeded from the session's status at open, so a pager opened on an
+        # already-hung session emits the recovery when the heartbeat resumes.
+        self._hung_emitted = initially_hung
         self._exit_emitted = False
         self._removed_emitted = False
         # When the caller already snapshot the session with `_scan_from`, pass
@@ -837,16 +849,7 @@ class PagerSource:
 
                 held = probe_held(self.session_dir / LOCK_NAME)
                 if held is True:
-                    try:
-                        mtime = (self.session_dir / idx_name(segs[-1])).stat().st_mtime
-                    except FileNotFoundError:
-                        mtime = time.time()
-                    if (
-                        time.time() - mtime > 3 * self.cfg.heartbeat_sec
-                        and not self._hung_emitted
-                    ):
-                        self.queue.put(SourceEvent(kind="hung", last_activity=mtime))
-                        self._hung_emitted = True
+                    self._check_hung(segs[-1])
                     continue
 
                 # Lock file gone (None) or dir gone mid-iteration -> removal,
@@ -867,6 +870,26 @@ class PagerSource:
         finally:
             watcher.close()
 
+    def _check_hung(self, seg: int) -> None:
+        """Emit "hung" when the idx mtime goes stale with the lock still held,
+        and the matching "running" recovery when it freshens again.
+
+        The recorder heartbeats by touching the idx mtime, so recovery fires
+        even if the recorder resumes without producing output. New lines also
+        write the idx, so they freshen the mtime too.
+        """
+        try:
+            mtime = (self.session_dir / idx_name(seg)).stat().st_mtime
+        except FileNotFoundError:
+            mtime = time.time()
+        stale = time.time() - mtime > 3 * self.cfg.heartbeat_sec
+        if stale and not self._hung_emitted:
+            self.queue.put(SourceEvent(kind="hung", last_activity=mtime))
+            self._hung_emitted = True
+        elif not stale and self._hung_emitted:
+            self.queue.put(SourceEvent(kind="running"))
+            self._hung_emitted = False
+
     def _drain_new_lines(self) -> None:
         """Push newly indexed lines (and partial-tail changes) onto the queue,
         resuming where we left off.
@@ -874,20 +897,16 @@ class PagerSource:
         Cost is O(bytes past the scan cursor) per wakeup — segments wholly
         below `self._scan.next_byte` are not re-read.
         """
-        emitted = False
         lines, partial = _scan_from(self.session_dir, self._scan)
         for line in lines:
             if line.n > self.cursor:
                 self.queue.put(line)
                 self.cursor = line.n
-                emitted = True
         # Lines go first so the consumer numbers the partial off fresh commits.
         key = (partial.text, partial.end_byte)
         if key != self._last_partial:
             self.queue.put(partial)
             self._last_partial = key
-        if emitted:
-            self._hung_emitted = False  # fresh activity clears prior hung warning
 
 
 def _exit_badge(info: SessionInfo | None) -> str:
@@ -1136,11 +1155,15 @@ class _LineStyleCache:
     SGR state persists across newlines, so styles carry over until reset.
     Start styles extend incrementally as lines arrive; spans are memoized
     so an idle render loop repaints from cache.
+
+    `styled=False` (strip mode) skips carry-over styling; the chunks are
+    identical either way. Fixed at construction so the span memo stays valid.
     """
 
     _SPANS_MAX = 4096  # bounds memory when scrubbing through huge buffers
 
-    def __init__(self) -> None:
+    def __init__(self, *, styled: bool = True) -> None:
+        self._styled = styled
         self._starts: list[Style] = []
         self._end = DEFAULT_STYLE
         self._spans: dict[int, list[tuple[str, Style]]] = {}
@@ -1157,18 +1180,17 @@ class _LineStyleCache:
     def tail_style(self, lines: list[Line]) -> Style:
         """SGR carry-over state after the last line — the start style for the
         partial tail."""
+        if not self._styled:
+            return DEFAULT_STYLE
         if lines:
             self.start_style(lines, len(lines) - 1)  # extend through the last
         return self._end
 
-    def spans(
-        self, lines: list[Line], i: int, *, styled: bool = True
-    ) -> list[tuple[str, Style]]:
-        """Parsed spans of line `i`. `styled=False` skips carry-over styling
-        (the chunks are identical either way)."""
+    def spans(self, lines: list[Line], i: int) -> list[tuple[str, Style]]:
+        """Parsed spans of line `i`."""
         cached = self._spans.get(i)
         if cached is None:
-            start = self.start_style(lines, i) if styled else DEFAULT_STYLE
+            start = self.start_style(lines, i) if self._styled else DEFAULT_STYLE
             cached = _expanded_spans(_display_text(lines[i]), start)
             if len(self._spans) >= self._SPANS_MAX:
                 self._spans.clear()
@@ -1186,7 +1208,11 @@ def run_pager(info: SessionInfo, cfg: Config, *, strip: bool) -> int:
     state.set_partial(partial)
     initial_cursor = lines[-1].n if lines else 0
     source = PagerSource(
-        info.path, cfg, initial_cursor=initial_cursor, scan_resume=scan
+        info.path,
+        cfg,
+        initial_cursor=initial_cursor,
+        scan_resume=scan,
+        initially_hung=info.status == "hung",
     )
     source.start()
     try:
@@ -1236,7 +1262,7 @@ def _curses_loop(
     count_buffer = ""
     prompt_pending = b""  # incomplete UTF-8 sequence from the search prompt
     attrs = _AttrMap()
-    styles = _LineStyleCache()
+    styles = _LineStyleCache(styled=not strip)
 
     while True:
         h, _w = stdscr.getmaxyx()
@@ -1371,6 +1397,7 @@ def _drain_source(source: PagerSource, state: PagerState) -> None:
     """Pull everything pending from the source queue into the state."""
     new_lines: list[Line] = []
     partial: PartialTail | None = None
+    events: list[SourceEvent] = []
     while True:
         try:
             item = source.queue.get_nowait()
@@ -1380,29 +1407,33 @@ def _drain_source(source: PagerSource, state: PagerState) -> None:
             new_lines.append(item)
         elif isinstance(item, PartialTail):
             partial = item  # latest snapshot wins
-        else:  # SourceEvent
-            if item.kind == "hung":
-                state.set_state_badge("hung")
-            elif item.kind == "exit":
-                state.set_state_badge(_exit_badge(item.info))
-            elif item.kind == "removed":
-                state.set_state_badge("REMOVED")
-                state.set_flash("removed")
+        else:
+            events.append(item)
     if new_lines:
         state.feed_lines(new_lines)
     # After feed_lines, so the partial is numbered against the new last line.
     if partial is not None:
         state.set_partial(partial)
+    # Events last: the source queues final lines before its terminal event, so
+    # a follow-mode feed must scroll them into view before the badge drops follow.
+    for ev in events:
+        if ev.kind in LIVE_BADGES:  # these kinds are the badge itself
+            state.set_state_badge(ev.kind)
+        elif ev.kind == "exit":
+            state.set_state_badge(_exit_badge(ev.info))
+        elif ev.kind == "removed":
+            state.set_state_badge("REMOVED")
+            state.set_flash("removed")
 
 
 def _row_spans(
-    state: PagerState, styles: _LineStyleCache, i: int, color: bool
+    state: PagerState, styles: _LineStyleCache, i: int
 ) -> list[tuple[str, Style]]:
     """Painted spans for buffer row `i`. The partial-tail row (index
     `len(lines)`) mutates in place, so it bypasses the style cache."""
     if i < len(state.lines):
-        return styles.spans(state.lines, i, styled=color)
-    start = styles.tail_style(state.lines) if color else DEFAULT_STYLE
+        return styles.spans(state.lines, i)
+    start = styles.tail_style(state.lines)
     return _expanded_spans(_display_text(state._line_at(i)), start)
 
 
@@ -1450,7 +1481,7 @@ def _render(
             _safe_addstr(stdscr, i, 0, "~")
             continue
         col = 0  # cells, not chars: wide glyphs occupy two
-        for chunk, style in _row_spans(state, styles, state.view_top + i, color):
+        for chunk, style in _row_spans(state, styles, state.view_top + i):
             if col >= w - 1:
                 break
             clipped, cells = _clip_cells(chunk, w - 1 - col)
@@ -1468,8 +1499,7 @@ def _render(
             if row >= content_rows:
                 break  # rows ascend
             text = "".join(
-                chunk
-                for chunk, _ in _row_spans(state, styles, state.view_top + row, color)
+                chunk for chunk, _ in _row_spans(state, styles, state.view_top + row)
             )
             # Spans ascend within the row: one pass converts offsets to cells.
             pos = 0
