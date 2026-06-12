@@ -186,29 +186,33 @@ def cmd_ls(args) -> int:
         sessions = [s for s in sessions if s.status in ("running", "hung")]
 
     if args.json:
+        # Key order mirrors the human columns: identity, status/timing,
+        # cwd/command, then storage internals.
         for s in sessions:
-            obj = {
-                "id": s.id,
-                "command": s.meta.command,
-                "cwd": s.meta.cwd,
-                "startedAt": s.meta.started_at,
-                "status": s.status,
-                "path": str(s.path),
-                "firstSegment": s.watermarks.first_segment,
-                "lastSegment": s.watermarks.last_segment,
-                "firstLine": s.watermarks.first_line,
-                "lastLine": s.watermarks.last_line,
-                "firstByte": s.watermarks.first_byte,
-                "lastByte": s.watermarks.last_byte,
-                "count": s.watermarks.count,
-                "lastActivity": s.last_activity,
-            }
+            obj = {"id": s.id}
             if s.meta.name is not None:
                 obj["name"] = s.meta.name
+            obj["status"] = s.status
+            obj["startedAt"] = s.meta.started_at
             if s.exited_at is not None:
                 obj["exitedAt"] = s.exited_at
             if s.exit_code is not None:
                 obj["exitCode"] = s.exit_code
+            obj.update(
+                {
+                    "lastActivity": s.last_activity,
+                    "cwd": s.meta.cwd,
+                    "command": s.meta.command,
+                    "path": str(s.path),
+                    "firstSegment": s.watermarks.first_segment,
+                    "lastSegment": s.watermarks.last_segment,
+                    "firstLine": s.watermarks.first_line,
+                    "lastLine": s.watermarks.last_line,
+                    "firstByte": s.watermarks.first_byte,
+                    "lastByte": s.watermarks.last_byte,
+                    "count": s.watermarks.count,
+                }
+            )
             print(json.dumps(obj, separators=(",", ":")))
         return 0
 
