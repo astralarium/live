@@ -6,12 +6,16 @@
 
 ## Git
 
-Do not stage, unstage, or commit changes. The user will take those actions.
+Do not stage, unstage, or commit changes. Leave those actions to the user.
 
 ## Comments
 
-Keep comments tight and concise.
+Keep comments clean and concise.
 Document API interfaces and expectations.
 Minimal section markers are okay.
+
+State invariants abstractly — just the rule as simple as possible.
+Prefer referencing categories and high level concepts over implementation details.
+
 Only add extra comments if the code is not self-explanatory.
-DO NOT mention historical cruft or change history.
+DO NOT mention historical cruft or change logs
