@@ -12,12 +12,17 @@ from pathlib import Path
 import pytest
 
 from live.format import (
+    IDX_HEADER,
+    IDX_MAGIC,
     IDX_RECORD,
+    IDX_VERSION,
     Meta,
     Watermarks,
     count_complete_lines,
     idx_record_count,
     last_idx_record,
+    pack_idx_header,
+    read_segment_start,
 )
 from live.reader import (
     StreamView,
@@ -203,9 +208,27 @@ def test_count_complete_lines_ignores_partial_tail(tmp_path) -> None:
     assert count_complete_lines(p) == 2
 
 
+def test_idx_header_roundtrip(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    p.write_bytes(pack_idx_header(4096, 4000))
+    assert read_segment_start(p) == 4096
+
+
+def test_idx_header_rejects_bad_magic(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    p.write_bytes(IDX_HEADER.pack(b"NOPE", IDX_VERSION, 4096, 4000))
+    assert read_segment_start(p) is None
+
+
+def test_idx_header_rejects_unknown_version(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    p.write_bytes(IDX_HEADER.pack(IDX_MAGIC, IDX_VERSION + 1, 4096, 4000))
+    assert read_segment_start(p) is None
+
+
 def test_idx_record_count(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
-    p.write_bytes(b"\x00" * (16 + 3 * 24))  # 16-byte header + 3 records
+    p.write_bytes(pack_idx_header(0, 0) + b"\x00" * (3 * 24))  # header + 3 records
     assert idx_record_count(p) == 3
 
 
@@ -215,13 +238,13 @@ def test_last_idx_record_ignores_torn_append(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
     rec1 = IDX_RECORD.pack(1, 1000.0, 0)
     rec2 = IDX_RECORD.pack(2, 1001.0, 10)
-    p.write_bytes(b"\x00" * 16 + rec1 + rec2 + rec1[:7])  # torn third record
+    p.write_bytes(pack_idx_header(0, 0) + rec1 + rec2 + rec1[:7])  # torn third record
     assert last_idx_record(p) == (2, 1001.0, 10)
 
 
 def test_last_idx_record_header_only(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
-    p.write_bytes(b"\x00" * 16)
+    p.write_bytes(pack_idx_header(0, 0))
     assert last_idx_record(p) is None
 
 

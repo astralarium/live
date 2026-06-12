@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from live.format import IDX_HEADER_SIZE, IDX_RECORD_SIZE
+
 
 def test_tail_c_plus_emits_bytes_after_cursor(project: Path, run_live) -> None:
     """Probe next-byte, then `tail -c +K` should emit only bytes after position K."""
@@ -131,7 +133,12 @@ def test_bytes_since_reports_partial_line(
                 i = idx.read_bytes()
             except FileNotFoundError:
                 return False
-            return len(i) == 40 and b"partial prompt >" in s and not s.endswith(b"\n")
+            # Header + exactly one record: only the complete line is indexed.
+            return (
+                len(i) == IDX_HEADER_SIZE + IDX_RECORD_SIZE
+                and b"partial prompt >" in s
+                and not s.endswith(b"\n")
+            )
 
         assert wait_for(has_partial, timeout=8.0), "partial state never appeared"
 

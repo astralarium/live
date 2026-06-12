@@ -29,12 +29,12 @@ from pathlib import Path
 
 from .config import Config
 from .format import (
-    IDX_HEADER,
     IDX_RECORD,
     LOCK_NAME,
     Meta,
     idx_name,
     list_segments,
+    pack_idx_header,
     stamp_dead,
     stream_name,
     write_meta_atomic,
@@ -153,7 +153,7 @@ class _Recorder:
                 else self.lifetime_bytes
             )
             self._write_all(
-                self.idx_fd, IDX_HEADER.pack(self.lifetime_bytes, line_start)
+                self.idx_fd, pack_idx_header(self.lifetime_bytes, line_start)
             )
         # pending_line_* is NOT reset: a partial line spans rotation.
         self.last_idx_touch = time.time()

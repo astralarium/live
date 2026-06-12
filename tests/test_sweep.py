@@ -8,7 +8,14 @@ import time
 from pathlib import Path
 
 from live.config import Config
-from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME, Meta, Watermarks
+from live.format import (
+    DEAD_NAME,
+    INCONSISTENT_MARKER,
+    LOCK_NAME,
+    Meta,
+    Watermarks,
+    pack_idx_header,
+)
 from live.session import STARTUP_ORPHAN_SEC, SessionInfo, sweep_all, sweep_one
 from live.state import SWEEP_INTERVAL_SEC, last_sweep_time, mark_swept, state_path
 from live.verbose import emit_exit
@@ -39,7 +46,7 @@ def test_sweep_stamps_consistent_when_stream_and_idx_match(tmp_path: Path) -> No
     (sess / LOCK_NAME).write_text("99999\n")  # pid; flock probe will succeed.
     # 3 complete lines, 3 idx records -> consistent.
     (sess / "stream.0000.log").write_bytes(b"a\nb\nc\n")
-    (sess / "lines.0000.idx").write_bytes(b"\x00" * (16 + 3 * 24))
+    (sess / "lines.0000.idx").write_bytes(pack_idx_header(0, 0) + b"\x00" * (3 * 24))
 
     sweep_one(sess, _cfg())
 
@@ -57,7 +64,7 @@ def test_sweep_stamps_inconsistent_when_stream_is_one_line_ahead(
     (sess / LOCK_NAME).write_text("99999\n")
     # 3 complete lines but only 2 idx records -> crash mid-write.
     (sess / "stream.0000.log").write_bytes(b"a\nb\nc\n")
-    (sess / "lines.0000.idx").write_bytes(b"\x00" * (16 + 2 * 24))
+    (sess / "lines.0000.idx").write_bytes(pack_idx_header(0, 0) + b"\x00" * (2 * 24))
 
     sweep_one(sess, _cfg())
 
@@ -97,7 +104,7 @@ def test_sweep_negative_ttl_never_deletes(tmp_path: Path) -> None:
     sess = _stub_session(sessions_dir)
     (sess / LOCK_NAME).write_text("99999\n")
     (sess / "stream.0000.log").write_bytes(b"a\n")
-    (sess / "lines.0000.idx").write_bytes(b"\x00" * 16)
+    (sess / "lines.0000.idx").write_bytes(pack_idx_header(0, 0))
     # Pre-stamp deadAt to a long-ago mtime so a positive TTL would delete it.
     dead = sess / DEAD_NAME
     dead.write_bytes(b"")

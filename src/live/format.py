@@ -1,11 +1,14 @@
 """On-disk format helpers: meta.json, idx records, segment enumeration.
 
-Index format: 16-byte header (`>QQ` lifetime byte offset of segment start,
-lifetime byte offset where the line containing the segment's first byte
-began — equal when the segment starts at a line boundary), then append-only
-24-byte records (`>QdQ` line number / timestamp / lifetime byte offset of
-line's first byte). All integers big-endian; timestamps are seconds since
-epoch.
+Index format: 24-byte header (`>4sIQQ` magic `LIDX`, format version,
+lifetime byte offset of segment start, lifetime byte offset where the line
+containing the segment's first byte began — equal when the segment starts
+at a line boundary), then append-only 24-byte records (`>QdQ` line number /
+timestamp / lifetime byte offset of line's first byte). All integers
+big-endian; timestamps are seconds since epoch.
+
+A wrong magic or unknown version reads as no-header (`None`), the same
+graceful path readers already take for a torn idx.
 
 Closed segments are exactly `segmentKb`; a line may span segments. Its record
 lives in the idx that was active when its `\n` arrived (always the segment
@@ -29,10 +32,18 @@ LOCK_NAME = "process.lock"
 DEAD_NAME = "deadAt"
 INCONSISTENT_MARKER = b"inconsistent\n"
 
-IDX_HEADER = struct.Struct(">QQ")
+IDX_MAGIC = b"LIDX"
+IDX_VERSION = 1
+
+IDX_HEADER = struct.Struct(">4sIQQ")
 IDX_HEADER_SIZE = IDX_HEADER.size
 IDX_RECORD = struct.Struct(">QdQ")
 IDX_RECORD_SIZE = IDX_RECORD.size
+
+
+def pack_idx_header(start: int, line_start: int) -> bytes:
+    return IDX_HEADER.pack(IDX_MAGIC, IDX_VERSION, start, line_start)
+
 
 _STREAM_RE = re.compile(r"^stream\.(\d+)\.log$")
 
@@ -148,7 +159,10 @@ def _read_header(idx_path: Path) -> tuple[int, int] | None:
             buf = f.read(IDX_HEADER_SIZE)
             if len(buf) < IDX_HEADER_SIZE:
                 return None
-            return IDX_HEADER.unpack(buf)
+            magic, version, start, line_start = IDX_HEADER.unpack(buf)
+            if magic != IDX_MAGIC or version != IDX_VERSION:
+                return None
+            return start, line_start
     except FileNotFoundError:
         return None
 

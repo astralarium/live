@@ -71,9 +71,10 @@ Possible preceding lines, in order:
       process.lock      # held by the recorder for its lifetime — liveness signal
       deadAt            # post-mortem marker; mtime = TTL clock, content = verdict
       stream.NNNN.log   # raw PTY bytes
-      lines.NNNN.idx    # binary line index: 16-byte header (>QQ segment start byte,
-                        # start byte of the line open at that point) then 24-byte
-                        # records (>QdQ: n, t, line start byte), one per line
+      lines.NNNN.idx    # binary line index: 24-byte header (>4sIQQ magic "LIDX",
+                        # format version, segment start byte, start byte of the line
+                        # open at that point) then 24-byte records (>QdQ: n, t,
+                        # line start byte), one per line
 ```
 
 The recorder appends to the highest-numbered pair; frozen segments are immutable until retention unlinks them. Session IDs are UUIDv4; chronological order comes from `meta.startedAt`.

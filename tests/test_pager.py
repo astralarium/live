@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from live.config import Config
-from live.format import IDX_HEADER, IDX_RECORD
+from live.format import IDX_RECORD, pack_idx_header
 from live.pager import (
     Line,
     PagerSource,
@@ -714,7 +714,7 @@ def test_feed_prompt_byte_ignores_curses_function_keys() -> None:
 
 def _write_idx(path: Path, recs: list[tuple[int, float, int]]) -> None:
     """Idx fixture: header (segment start, line start) + (n, t, b) records."""
-    buf = IDX_HEADER.pack(0, 0)
+    buf = pack_idx_header(0, 0)
     for n, t, b in recs:
         buf += IDX_RECORD.pack(n, t, b)
     path.write_bytes(buf)

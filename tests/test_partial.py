@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from live.format import IDX_HEADER_SIZE, IDX_RECORD_SIZE
+
 
 def test_partial_line_surfaces_in_tail(
     project: Path, live_env, run_live, wait_for, wait_for_session
@@ -42,7 +44,12 @@ def test_partial_line_surfaces_in_tail(
                 i = idx.read_bytes()
             except FileNotFoundError:
                 return False
-            return len(i) == 40 and b"Continue?" in s and not s.endswith(b"\n")
+            # Header + exactly one record: only the first line is indexed.
+            return (
+                len(i) == IDX_HEADER_SIZE + IDX_RECORD_SIZE
+                and b"Continue?" in s
+                and not s.endswith(b"\n")
+            )
 
         assert wait_for(has_partial, timeout=8.0), "partial state never appeared"
 

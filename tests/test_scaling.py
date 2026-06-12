@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from live.format import IDX_HEADER, IDX_RECORD, idx_name, stream_name
+from live.format import IDX_RECORD, idx_name, pack_idx_header, stream_name
 from live.reader import (
     bytes_since,
     cat_all,
@@ -49,7 +49,7 @@ def _build_session(d: Path, *, partial: bytes = b"") -> dict:
             body += partial
             offset += len(partial)
         (d / stream_name(s)).write_bytes(body)
-        (d / idx_name(s)).write_bytes(IDX_HEADER.pack(seg_start, seg_start) + recs)
+        (d / idx_name(s)).write_bytes(pack_idx_header(seg_start, seg_start) + recs)
         data += body
     return {"lines": n, "tip": offset, "data": data}
 
