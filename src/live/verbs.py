@@ -8,7 +8,6 @@ import shutil
 import signal
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from .ansi import strip_ansi
@@ -213,16 +212,15 @@ def cmd_ls(args) -> int:
         return 0
 
     # Human columns: header + equal-width fields (last column unpadded).
-    if not sessions:
-        return 0
     scope = _scope_filter(args)
-    headers = ("ID", "TIME", "STATUS", "NAME", "CWD", "COMMAND")
+    now = time.time()
+    headers = ("ID", "NAME", "STATUS", "AGE", "CWD", "COMMAND")
     rows = [
         (
             s.id[:8],
-            _fmt_time(s.meta.started_at),
-            s.status,
             s.meta.name or "-",
+            _fmt_status(s, now),
+            _fmt_duration(now - s.meta.started_at),
             _cwd_display(s.meta.cwd, scope),
             " ".join(s.meta.command),
         )
@@ -239,8 +237,31 @@ def cmd_ls(args) -> int:
     return 0
 
 
-def _fmt_time(t: float) -> str:
-    return datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S")
+def _fmt_duration(secs: float) -> str:
+    """Compact kubectl-style duration: 45s, 5m12s, 2h30m, 3d4h."""
+    secs = max(0, int(secs))
+    if secs < 60:
+        return f"{secs}s"
+    m, s = divmod(secs, 60)
+    if m < 60:
+        return f"{m}m{s}s" if s else f"{m}m"
+    h, m = divmod(m, 60)
+    if h < 24:
+        return f"{h}h{m}m" if m else f"{h}h"
+    d, h = divmod(h, 24)
+    return f"{d}d{h}h" if h else f"{d}d"
+
+
+def _fmt_status(s: SessionInfo, now: float) -> str:
+    """docker-ps style status: Up 5m / Up 5m (hung) / Exited (0) 2h ago / Dead."""
+    if s.status in ("running", "hung"):
+        up = f"Up {_fmt_duration(now - s.meta.started_at)}"
+        return f"{up} (hung)" if s.status == "hung" else up
+    ago = f" {_fmt_duration(now - s.exited_at)} ago" if s.exited_at else ""
+    if s.status == "exited":
+        code = f" ({s.exit_code})" if s.exit_code is not None else ""
+        return f"Exited{code}{ago}"
+    return f"Dead{ago}"  # inconsistent exit records
 
 
 def _cwd_display(meta_cwd: str, scope: Path | None) -> str:
