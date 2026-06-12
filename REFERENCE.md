@@ -10,8 +10,8 @@
 - [`live stop`](#live-stop)
 - [`live rm`](#live-rm)
 - [`live completion`](#live-completion)
-- [`live completion-script`](#live-completionscript)
-- [`live update-shell`](#live-updateshell)
+- [`live completion-script`](#live-completion-script)
+- [`live update-shell`](#live-update-shell)
 - [`live llms.txt`](#live-llmstxt)
 
 ## `live`

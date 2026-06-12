@@ -44,8 +44,8 @@ global scope.
 live cat -v server
 live head -vn 50 server  # first 50 lines
 live tail -vn 50 server  # last 50 lines
-live head -t 1m          # lines at or before epoch T or (now - interval)
-live tail -t 1m          # lines after epoch T or (now - interval)
+live head -t 1m server   # lines at or before epoch T or (now - interval)
+live tail -t 1m server   # lines after epoch T or (now - interval)
 ```
 
 With `-v`, log content goes to stdout and `live` metadata goes to stderr:
@@ -85,7 +85,7 @@ live stop server                  # SIGTERM a running session
 live stop --all                   # stop everything running in scope
 live rm server                    # remove a session
 live rm -f server                 # stop and remove a session
-live rm --exited --older-than 1d  # remove exited sessions with last activity > 1 day ago
+live rm --exited --older-than 1d  # remove sessions that exited > 1 day ago
 ```
 
 Old sessions are cleaned opportunistically

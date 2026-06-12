@@ -48,8 +48,10 @@ def discover_verbs(top_help: str) -> list[str]:
 
 
 def _anchor(verb: str) -> str:
-    """GitHub-flavored markdown anchor for a `## \\`live <verb>\\`` heading."""
-    return "live-" + re.sub(r"[^a-z0-9]+", "", verb.lower())
+    """GitHub slug for a `## \\`live <verb>\\`` heading: lowercase, keep
+    alphanumerics/`-`/`_`, drop other punctuation, spaces become hyphens."""
+    slug = re.sub(r"[^a-z0-9 _-]", "", f"live {verb}".lower())
+    return slug.replace(" ", "-")
 
 
 def main() -> None:
