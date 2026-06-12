@@ -673,23 +673,25 @@ def cmd_completion_script(args) -> int:
 
 
 def cmd_update_shell(args) -> int:
-    from .completion import script_for
+    from .completion import loader_for
 
     shell = args.shell or _detect_shell()
     if shell is None:
         _err("could not detect shell; pass bash, zsh, or fish")
         return 2
-    payload = script_for(shell)
-    if payload is None:
+    loader = loader_for(shell)
+    if loader is None:
         _err(f"unsupported shell: {shell}")
         return 2
 
     dst, hint = _completion_install_path(shell)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(payload)
+    dst.write_text(loader)
     print(f"installed {shell} completion -> {dst}")
     if hint:
         print(hint)
+    if shutil.which("live") is None:
+        _err("warning: `live` is not on $PATH; completions will not work until it is")
     return 0
 
 

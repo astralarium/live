@@ -621,6 +621,58 @@ def test_bash_cwd_with_spaces_completes_and_scopes(
     assert "spacey" in scoped, scoped
 
 
+# ----- update-shell loader stubs -----
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_loader_stub_round_trips(run_live, live_shim, tmp_path: Path) -> None:
+    """Sourcing the installed stub evals the real payload from `live`."""
+    test_env = live_shim
+    run_live(tmp_path, "update-shell", "bash")
+    stub = tmp_path / ".local/share/bash-completion/completions/live"
+    candidates = _drive_bash(stub, ("live", ""), cword=1, env=test_env)
+    assert CORE_VERBS <= candidates, (
+        f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+    )
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_loader_stub_round_trips(run_live, live_shim, tmp_path: Path) -> None:
+    test_env = live_shim
+    run_live(tmp_path, "update-shell", "fish")
+    stub = tmp_path / ".config/fish/completions/live.fish"
+    candidates = _drive_fish(stub, "live ", env=test_env)
+    assert CORE_VERBS <= candidates, (
+        f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+    )
+
+
+@pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")
+def test_zsh_loader_stub_round_trips(
+    run_live, live_shim, live_env, tmp_path: Path
+) -> None:
+    """Autoloading the stub `_live` evals the real payload: the helper
+    functions exist after the first invocation."""
+    test_env = live_shim
+    live_env["FPATH"] = "/nonexistent"  # pin the fallback install path
+    run_live(tmp_path, "update-shell", "zsh")
+    stub = tmp_path / ".local/share/zsh/site-functions/_live"
+    assert stub.is_file()
+    # `_live` runs outside a completion context, so `_arguments` fails after
+    # the eval has defined the payload's functions — silence and ignore it.
+    inner = (
+        f"fpath=({stub.parent} $fpath); "
+        "autoload -Uz compinit; "
+        "compinit -u -d ${ZDOTDIR:-/tmp}/.zcompdump.$$; "
+        "_live 2>/dev/null; "
+        "(( $+functions[_live_selectors] )) && print LOADED"
+    )
+    out = subprocess.run(
+        ["zsh", "-c", inner], capture_output=True, text=True, env=test_env
+    ).stdout
+    assert "LOADED" in out, out
+
+
 # ----- zsh -----
 
 

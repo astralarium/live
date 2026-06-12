@@ -593,5 +593,26 @@ complete -c live -n "__live_verb_is completion-script update-shell" -a "bash zsh
 """
 
 
+# `update-shell` installs these loaders instead of the payloads above, so
+# completions always track the installed `live` and updating it never
+# requires rerunning `update-shell`. Each shell evaluates its loader lazily
+# (bash-completion, compinit autoload, fish autoload), costing one `live`
+# invocation per shell session; if `live` is off $PATH the loader degrades
+# to no completions and retries in the next session.
+
+BASH_LOADER = 'eval "$(live completion-script bash 2>/dev/null)"\n'
+
+# Autoloaded as `_live`'s function body: the eval (re)defines `_live` and
+# its helpers, then the payload's trailing `_live "$@"` completes the
+# current word.
+ZSH_LOADER = '#compdef live\neval "$(live completion-script zsh 2>/dev/null)"\n'
+
+FISH_LOADER = "live completion-script fish 2>/dev/null | source\n"
+
+
 def script_for(shell: str) -> str | None:
     return {"bash": BASH, "zsh": ZSH, "fish": FISH}.get(shell)
+
+
+def loader_for(shell: str) -> str | None:
+    return {"bash": BASH_LOADER, "zsh": ZSH_LOADER, "fish": FISH_LOADER}.get(shell)

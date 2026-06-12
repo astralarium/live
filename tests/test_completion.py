@@ -123,7 +123,9 @@ def test_update_shell_writes_completion(
     result = run_live(tmp_path, "update-shell", shell)
     dst = tmp_path / rel
     assert dst.is_file(), f"{shell}: expected file at {dst}"
-    assert dst.read_text(), f"{shell}: payload is empty"
+    # A loader stub, not a payload snapshot: completions track the
+    # installed `live` without rerunning update-shell.
+    assert f"completion-script {shell}" in dst.read_text(), dst.read_text()
     assert str(dst) in result.stdout
 
 
