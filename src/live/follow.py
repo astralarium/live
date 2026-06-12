@@ -16,6 +16,7 @@ from .format import (
     idx_name,
     list_segments,
     read_meta,
+    stream_name,
 )
 from .lock import probe_held
 from .reader import last_time_of, load_stream_view
@@ -58,16 +59,30 @@ def follow_session(
     hung_emitted = False
 
     watcher = new_watcher()
+    watched_seg: int | None = None
+    watched_paths: list[Path] = []
+
+    def _watch_segment(seg: int) -> None:
+        """Re-arm per-segment watches: the idx (completed lines) and the
+        stream (partial-line bytes — GNU `tail -f` latency for progress bars
+        and prompts; the idx only changes on a newline)."""
+        nonlocal watched_seg
+        for old in watched_paths:
+            watcher.remove_path(old)
+        watched_paths.clear()
+        for p in (session_dir / idx_name(seg), session_dir / stream_name(seg)):
+            try:
+                watcher.add_path(p)
+                watched_paths.append(p)
+            except OSError:
+                pass
+        watched_seg = seg
+
     try:
         watcher.add_path(session_dir)
         active_seg = list_segments(session_dir)
-        active_idx_path: Path | None = None
         if active_seg:
-            active_idx_path = session_dir / idx_name(active_seg[-1])
-            try:
-                watcher.add_path(active_idx_path)
-            except OSError:
-                active_idx_path = None
+            _watch_segment(active_seg[-1])
 
         while not _INTERRUPTED:
             # Short timeout so SIGINT and hung-detection re-checks aren't blocked
@@ -86,15 +101,8 @@ def follow_session(
                 # Segments never vanish under a live recorder: the session
                 # was removed (`live rm`) mid-follow.
                 return _report_removed()
-            new_active = session_dir / idx_name(segs[-1])
-            if active_idx_path != new_active:
-                if active_idx_path is not None:
-                    watcher.remove_path(active_idx_path)
-                active_idx_path = new_active
-                try:
-                    watcher.add_path(active_idx_path)
-                except OSError:
-                    pass
+            if segs[-1] != watched_seg:
+                _watch_segment(segs[-1])
 
             try:
                 new_cursor = _emit_new_bytes(session_dir, cursor, strip, verbose)

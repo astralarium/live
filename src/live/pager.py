@@ -31,7 +31,7 @@ from .ansi import (
     to_base16,
 )
 from .config import Config
-from .format import LOCK_NAME, idx_name, list_segments
+from .format import LOCK_NAME, idx_name, list_segments, stream_name
 from .lock import probe_held
 from .reader import cat_all, load_stream_view
 from .session import SessionInfo, session_info
@@ -765,7 +765,27 @@ class PagerSource:
 
     def _run(self) -> None:
         watcher = new_watcher()
-        active_idx_path: Path | None = None
+        watched_seg: int | None = None
+        watched_paths: list[Path] = []
+
+        def _watch_segment(seg: int) -> None:
+            # Idx (committed lines) plus stream (partial-tail bytes), so the
+            # pager's partial row updates with GNU-tail latency.
+            nonlocal watched_seg
+            for old in watched_paths:
+                watcher.remove_path(old)
+            watched_paths.clear()
+            for p in (
+                self.session_dir / idx_name(seg),
+                self.session_dir / stream_name(seg),
+            ):
+                try:
+                    watcher.add_path(p)
+                    watched_paths.append(p)
+                except OSError:
+                    pass
+            watched_seg = seg
+
         try:
             try:
                 watcher.add_path(self.session_dir)
@@ -773,11 +793,7 @@ class PagerSource:
                 pass
             segs = list_segments(self.session_dir)
             if segs:
-                active_idx_path = self.session_dir / idx_name(segs[-1])
-                try:
-                    watcher.add_path(active_idx_path)
-                except OSError:
-                    active_idx_path = None
+                _watch_segment(segs[-1])
 
             while not self._stop.is_set():
                 try:
@@ -797,18 +813,8 @@ class PagerSource:
                         self._removed_emitted = True
                     break
 
-                new_active = self.session_dir / idx_name(segs[-1])
-                if active_idx_path != new_active:
-                    if active_idx_path is not None:
-                        try:
-                            watcher.remove_path(active_idx_path)
-                        except OSError:
-                            pass
-                    active_idx_path = new_active
-                    try:
-                        watcher.add_path(active_idx_path)
-                    except OSError:
-                        pass
+                if segs[-1] != watched_seg:
+                    _watch_segment(segs[-1])
 
                 self._drain_new_lines()
 

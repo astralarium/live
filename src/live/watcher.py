@@ -1,4 +1,4 @@
-"""File-change watcher for `live tail -f`.
+"""File-change watcher for `live tail -f` and the pager's refresh thread.
 
 Backends, in order of preference:
   1. macOS: `select.kqueue` on each watched fd.
@@ -8,6 +8,16 @@ Backends, in order of preference:
 The API is event-edge-only: `wait()` returns the set of paths that were touched
 since the last call (or empty on timeout). Callers re-read the file to decide
 what's new.
+
+Watch granularity: callers watch the session directory (structural events —
+rotation, retention, removal) plus the active segment's idx AND stream files.
+The stream watch is what gives `tail -f` GNU-like latency on partial-line
+output (progress bars, prompts): the idx only changes on a completed line.
+Attribute-only changes (heartbeat `utime`) are deliberately not watched —
+followers would wake with nothing to read; hung detection rides the wait
+timeout instead. That timeout is the latency contract of last resort: any
+backend may miss or coalesce events, so callers must re-read from their
+cursor on every wakeup, whatever woke them.
 """
 
 from __future__ import annotations
@@ -54,6 +64,10 @@ class _KqueueWatcher(FsWatcher):
         fd = os.open(str(path), os.O_RDONLY)
         self._fds[path] = fd
         self._paths[fd] = path
+        # One mask serves dirs and files: NOTE_WRITE is entry churn on a dir
+        # fd and content writes on a file fd. kqueue does not relay child
+        # writes through a dir watch, so files needing write-latency (idx,
+        # stream) must be watched explicitly.
         ev = select.kevent(
             fd,
             filter=select.KQ_FILTER_VNODE,
@@ -158,7 +172,14 @@ class _InotifyWatcher(FsWatcher):
     def add_path(self, path: Path) -> None:
         if path in self._wd:
             return
-        mask = _IN_MODIFY | _IN_CREATE | _IN_DELETE | _IN_MOVED_FROM | _IN_MOVED_TO
+        # Directories: entry create/delete/rename (rotation, retention, rm).
+        # Files: content writes only — unlink is observed via the directory
+        # watch, and a dir watch would otherwise also relay child IN_MODIFY,
+        # duplicating the explicit idx/stream file watches.
+        if path.is_dir():
+            mask = _IN_CREATE | _IN_DELETE | _IN_MOVED_FROM | _IN_MOVED_TO
+        else:
+            mask = _IN_MODIFY
         wd = self._libc.inotify_add_watch(self._fd, os.fsencode(str(path)), mask)
         if wd < 0:
             err = ctypes.get_errno()
