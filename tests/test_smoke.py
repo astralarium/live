@@ -1,4 +1,4 @@
-"""End-to-end smoke test exercising run/ls/cat/tail/rm."""
+"""End-to-end smoke test exercising run/ps/cat/tail/rm."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ def test_full_cycle(project: Path, run_live) -> None:
     )
     assert proc.returncode == 0
 
-    ls = run_live(project, "ls", "-a", "--json")
-    lines = [ln for ln in ls.stdout.splitlines() if ln.strip()]
+    ps = run_live(project, "ps", "-a", "--json")
+    lines = [ln for ln in ps.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1
     info = json.loads(lines[0])
     assert info["name"] == "smoke"
@@ -50,8 +50,8 @@ def test_full_cycle(project: Path, run_live) -> None:
 
     rm = run_live(project, "rm", "smoke")
     assert rm.returncode == 0
-    ls_after = run_live(project, "ls", "-a", "--json")
-    assert ls_after.stdout.strip() == ""
+    ps_after = run_live(project, "ps", "-a", "--json")
+    assert ps_after.stdout.strip() == ""
 
 
 def test_tail_n_plus_is_inclusive_unix_semantics(project: Path, run_live) -> None:

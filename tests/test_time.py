@@ -69,7 +69,7 @@ def test_time_duration_form(project: Path, run_live) -> None:
     out = run_live(project, "tail", "-v", "-t", "1h", "dur")
     assert "recent" in out.stdout.replace("\r", "")
 
-    # Compound form, as shown by `live ls`.
+    # Compound form, as shown by `live ps`.
     out = run_live(project, "tail", "-v", "-t", "1h30m", "dur")
     assert "recent" in out.stdout.replace("\r", "")
 

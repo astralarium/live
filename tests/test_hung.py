@@ -14,7 +14,7 @@ def _write_config(project: Path, **fields) -> None:
     (project / ".live" / "config.json").write_text(json.dumps(fields))
 
 
-def test_ls_reports_hung_when_idx_mtime_is_stale(
+def test_ps_reports_hung_when_idx_mtime_is_stale(
     project: Path, run_live, spawn_run, wait_for, wait_for_session
 ) -> None:
     # Configure heartbeat to 1s so the hung threshold is 3s.
@@ -26,7 +26,7 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
         "no indexed line ever appeared"
     )
     # The idx exists before meta.json (setup order: lock, segments, meta);
-    # `ls` only lists sessions with meta, so wait for it or the read below
+    # `ps` only lists sessions with meta, so wait for it or the read below
     # can see an empty listing.
     assert wait_for(lambda: (sess_dir / "meta.json").exists(), timeout=8.0)
     # Freeze the recorder so no heartbeat or trailing startup write can
@@ -45,8 +45,8 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
 
         assert wait_for(_backdate, timeout=5.0), "idx mtime kept advancing"
 
-        ls = run_live(project, "ls", "--json")
-        info = json.loads(ls.stdout.strip().splitlines()[0])
+        ps = run_live(project, "ps", "--json")
+        info = json.loads(ps.stdout.strip().splitlines()[0])
         assert info["status"] == "hung"
 
         # tail -v should also surface "status=hung last-activity=<s>".

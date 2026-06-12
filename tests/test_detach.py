@@ -11,13 +11,13 @@ from pathlib import Path
 import pytest
 
 
-def _ls_entries(project: Path, run_live) -> list[dict]:
-    out = run_live(project, "ls", "-a", "--json").stdout
+def _ps_entries(project: Path, run_live) -> list[dict]:
+    out = run_live(project, "ps", "-a", "--json").stdout
     return [json.loads(ln) for ln in out.splitlines() if ln.strip()]
 
 
 def _entry(project: Path, run_live, session_id: str) -> dict | None:
-    for e in _ls_entries(project, run_live):
+    for e in _ps_entries(project, run_live):
         if e["id"] == session_id:
             return e
     return None
@@ -154,7 +154,7 @@ def test_concurrent_named_runs_admit_exactly_one(
     assert codes.count(0) == 1, (codes, errs)
     assert sum("already running" in e for e in errs) == len(procs) - 1
 
-    entries = _ls_entries(project, run_live)
+    entries = _ps_entries(project, run_live)
     assert sum(e["name"] == "race" for e in entries) == 1
 
 
@@ -177,7 +177,7 @@ def test_detach_with_closed_std_fds(
     )
     assert res.returncode == 0
     entry = next(
-        (e for e in _ls_entries(project, run_live) if e["name"] == "closedfd"),
+        (e for e in _ps_entries(project, run_live) if e["name"] == "closedfd"),
         None,
     )
     assert entry is not None

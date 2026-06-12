@@ -33,7 +33,7 @@ STATUS_DEAD = ("exited", "inconsistent")
 
 # A session dir with no process.lock is mid-startup (a microseconds window)
 # or a recorder that crashed inside it. Past this age it can never become
-# live, and with no meta it is invisible to ls/rm — sweep deletes it.
+# live, and with no meta it is invisible to ps/rm — sweep deletes it.
 STARTUP_ORPHAN_SEC = 3600
 
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 
-VERBS = ("run", "ls", "cat", "head", "tail", "less", "rm", "completion-script")
+VERBS = ("run", "ps", "cat", "head", "tail", "less", "rm", "completion-script")
 
 
 @pytest.mark.parametrize(

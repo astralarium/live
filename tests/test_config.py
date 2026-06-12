@@ -129,7 +129,7 @@ def _write_config(home: Path, text: str) -> Path:
 
 def test_cli_fails_hard_on_invalid_field(project: Path, run_live) -> None:
     p = _write_config(project, json.dumps({"maxKb": "512K"}))
-    res = run_live(project, "ls", check=False)
+    res = run_live(project, "ps", check=False)
     assert res.returncode == 1
     assert res.stderr.startswith("live: invalid config")
     assert str(p) in res.stderr
@@ -139,7 +139,7 @@ def test_cli_fails_hard_on_invalid_field(project: Path, run_live) -> None:
 
 def test_cli_fails_hard_on_malformed_json(project: Path, run_live) -> None:
     p = _write_config(project, "{not valid json")
-    res = run_live(project, "ls", check=False)
+    res = run_live(project, "ps", check=False)
     assert res.returncode == 1
     assert res.stderr.startswith("live: invalid config")
     assert str(p) in res.stderr
@@ -150,7 +150,7 @@ def test_cli_fails_hard_on_malformed_json(project: Path, run_live) -> None:
 def test_cli_help_and_version_skip_config(project: Path, run_live) -> None:
     """`live`, `-h`, `--version`, and subcommand `-h` never load config."""
     _write_config(project, "{not valid json")
-    for args in ([], ["-h"], ["--version"], ["ls", "-h"]):
+    for args in ([], ["-h"], ["--version"], ["ps", "-h"]):
         res = run_live(project, *args)
         assert res.returncode == 0
         assert "invalid config" not in res.stderr
@@ -158,6 +158,6 @@ def test_cli_help_and_version_skip_config(project: Path, run_live) -> None:
 
 def test_cli_unknown_keys_ignored(project: Path, run_live) -> None:
     _write_config(project, json.dumps({"futureKnob": True, "maxKb": 32}))
-    res = run_live(project, "ls")
+    res = run_live(project, "ps")
     assert res.returncode == 0
     assert res.stderr == ""

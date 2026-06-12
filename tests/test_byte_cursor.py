@@ -89,10 +89,10 @@ def test_tail_c_larger_than_stream_emits_all(project: Path, run_live) -> None:
     assert out == full
 
 
-def test_ls_json_exposes_first_byte_last_byte(project: Path, run_live) -> None:
-    """`ls --json` carries firstByte/lastByte alongside firstLine/lastLine."""
+def test_ps_json_exposes_first_byte_last_byte(project: Path, run_live) -> None:
+    """`ps --json` carries firstByte/lastByte alongside firstLine/lastLine."""
     run_live(project, "run", "-n", "fb", "--", "echo", "hi")
-    out = run_live(project, "ls", "-a", "--json")
+    out = run_live(project, "ps", "-a", "--json")
     info = json.loads(out.stdout.splitlines()[0])
     assert info["firstByte"] == 0
     assert info["lastByte"] > 0
@@ -163,7 +163,7 @@ def _configure_rotation(project: Path, *, segment_kb: int, max_kb: int) -> None:
 
 
 def test_first_byte_advances_after_rotation(project: Path, run_live) -> None:
-    """After retention drops segments, `firstByte` in ls --json reflects the
+    """After retention drops segments, `firstByte` in ps --json reflects the
     lifetime offset where retained data begins, and `lastByte` is the tip."""
     _configure_rotation(project, segment_kb=1, max_kb=2)
     run_live(
@@ -177,7 +177,7 @@ def test_first_byte_advances_after_rotation(project: Path, run_live) -> None:
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
-    out = run_live(project, "ls", "-a", "--json")
+    out = run_live(project, "ps", "-a", "--json")
     info = json.loads(out.stdout.splitlines()[0])
     assert info["firstByte"] > 0, "expected rotation to advance firstByte"
     assert info["lastByte"] > info["firstByte"], "lastByte must exceed firstByte"
@@ -185,7 +185,7 @@ def test_first_byte_advances_after_rotation(project: Path, run_live) -> None:
 
 def test_bytes_since_below_floor_warns_and_resumes(project: Path, run_live) -> None:
     """A byte cursor below the floor emits `dropped K bytes (from-byte=0,
-    first-byte=F)` where K=F and F matches `ls --json` firstByte; stdout
+    first-byte=F)` where K=F and F matches `ps --json` firstByte; stdout
     resumes at the floor."""
     _configure_rotation(project, segment_kb=1, max_kb=2)
     run_live(
@@ -200,7 +200,7 @@ def test_bytes_since_below_floor_warns_and_resumes(project: Path, run_live) -> N
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
     info = json.loads(
-        run_live(project, "ls", "-a", "--json", "drop").stdout.splitlines()[0]
+        run_live(project, "ps", "-a", "--json", "drop").stdout.splitlines()[0]
     )
     first_byte = info["firstByte"]
     last_byte = info["lastByte"]
@@ -240,7 +240,7 @@ def test_bytes_since_above_floor_resumes_cleanly(project: Path, run_live) -> Non
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
-    probe = run_live(project, "ls", "-a", "--json", "resume")
+    probe = run_live(project, "ps", "-a", "--json", "resume")
     info = json.loads(probe.stdout.splitlines()[0])
     midpoint = (info["firstByte"] + info["lastByte"]) // 2
 

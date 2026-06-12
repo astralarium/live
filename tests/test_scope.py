@@ -12,40 +12,40 @@ import json
 from pathlib import Path
 
 
-def _ls_names(stdout: str) -> set[str]:
+def _ps_names(stdout: str) -> set[str]:
     return {json.loads(ln).get("name") for ln in stdout.splitlines() if ln.strip()}
 
 
-def test_ls_excludes_sibling_dir_session(project: Path, run_live) -> None:
+def test_ps_excludes_sibling_dir_session(project: Path, run_live) -> None:
     a = project / "A"
     b = project / "B"
     a.mkdir()
     b.mkdir()
     run_live(a, "run", "-n", "in-A", "--", "sh", "-c", "echo a")
 
-    out = run_live(b, "ls", "-a", "--json")
+    out = run_live(b, "ps", "-a", "--json")
     assert out.stdout.strip() == ""
 
 
-def test_ls_global_includes_sibling_dir_session(project: Path, run_live) -> None:
+def test_ps_global_includes_sibling_dir_session(project: Path, run_live) -> None:
     a = project / "A"
     b = project / "B"
     a.mkdir()
     b.mkdir()
     run_live(a, "run", "-n", "in-A", "--", "sh", "-c", "echo a")
 
-    out = run_live(b, "ls", "-ag", "--json")
-    assert "in-A" in _ls_names(out.stdout)
+    out = run_live(b, "ps", "-ag", "--json")
+    assert "in-A" in _ps_names(out.stdout)
 
 
-def test_ls_default_scope_includes_descendant_session(project: Path, run_live) -> None:
+def test_ps_default_scope_includes_descendant_session(project: Path, run_live) -> None:
     a = project / "A"
     sub = a / "deep" / "sub"
     sub.mkdir(parents=True)
     run_live(sub, "run", "-n", "in-sub", "--", "sh", "-c", "echo s")
 
-    out = run_live(a, "ls", "-a", "--json")
-    assert "in-sub" in _ls_names(out.stdout)
+    out = run_live(a, "ps", "-a", "--json")
+    assert "in-sub" in _ps_names(out.stdout)
 
 
 def test_cat_respects_scope(project: Path, run_live) -> None:
@@ -63,15 +63,15 @@ def test_cat_respects_scope(project: Path, run_live) -> None:
     assert "hi" in hit.stdout
 
 
-def test_ls_cwd_flag_scopes_to_other_dir(project: Path, run_live) -> None:
+def test_ps_cwd_flag_scopes_to_other_dir(project: Path, run_live) -> None:
     a = project / "A"
     b = project / "B"
     a.mkdir()
     b.mkdir()
     run_live(a, "run", "-n", "in-A", "--", "sh", "-c", "echo a")
 
-    out = run_live(b, "ls", "-a", "-C", str(a), "--json")
-    assert "in-A" in _ls_names(out.stdout)
+    out = run_live(b, "ps", "-a", "-C", str(a), "--json")
+    assert "in-A" in _ps_names(out.stdout)
 
 
 def test_cat_cwd_flag_scopes_to_other_dir(project: Path, run_live) -> None:
@@ -94,8 +94,8 @@ def test_run_cwd_flag_runs_and_scopes_there(project: Path, run_live) -> None:
     run_live(b, "run", "-n", "via-C", "-C", str(a), "--", "pwd")
 
     # Scoped to A, not to the invoking directory B.
-    assert "via-C" in _ls_names(run_live(a, "ls", "-a", "--json").stdout)
-    assert run_live(b, "ls", "-a", "--json").stdout.strip() == ""
+    assert "via-C" in _ps_names(run_live(a, "ps", "-a", "--json").stdout)
+    assert run_live(b, "ps", "-a", "--json").stdout.strip() == ""
 
     # The child actually ran in A.
     cat = run_live(a, "cat", "via-C")
@@ -119,7 +119,7 @@ def test_run_cwd_flag_missing_dir_errors(project: Path, run_live) -> None:
 
 
 def test_cwd_and_global_flags_conflict(project: Path, run_live) -> None:
-    out = run_live(project, "ls", "-g", "-C", str(project), check=False)
+    out = run_live(project, "ps", "-g", "-C", str(project), check=False)
     assert out.returncode == 2
 
 
@@ -130,7 +130,7 @@ def test_cwd_flag_rejects_empty_value(project: Path, run_live) -> None:
     assert miss.returncode == 2
     assert "expected a directory path" in miss.stderr
 
-    out = run_live(project, "ls", "-C", "", check=False)
+    out = run_live(project, "ps", "-C", "", check=False)
     assert out.returncode == 2
 
 
@@ -147,11 +147,11 @@ def test_rm_respects_scope(project: Path, run_live) -> None:
     assert "no such session" in miss.stderr
 
     # Still present from A.
-    ls = run_live(a, "ls", "-a", "--json")
-    assert "out-of-scope" in _ls_names(ls.stdout)
+    ps = run_live(a, "ps", "-a", "--json")
+    assert "out-of-scope" in _ps_names(ps.stdout)
 
     # With -g, removal succeeds.
     rm = run_live(b, "rm", "-g", "out-of-scope")
     assert rm.returncode == 0
-    ls = run_live(a, "ls", "-a", "--json")
-    assert ls.stdout.strip() == ""
+    ps = run_live(a, "ps", "-a", "--json")
+    assert ps.stdout.strip() == ""

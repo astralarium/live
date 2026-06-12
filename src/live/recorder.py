@@ -638,7 +638,7 @@ def record_detached(
 
     The child detaches (`setsid`, fds on /dev/null) and reports back over a
     pipe once the session dir + lock exist, so the session is visible to
-    `live ls` by the time this returns. Returns `(session_id, error)`:
+    `live ps` by the time this returns. Returns `(session_id, error)`:
     exactly one is non-None.
 
     `after_fork` (if given) runs first thing in the forked child — e.g. to

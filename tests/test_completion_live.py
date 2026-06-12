@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 
-CORE_VERBS = {"run", "ls", "cat", "head", "tail", "less", "rm", "completion"}
+CORE_VERBS = {"run", "ps", "cat", "head", "tail", "less", "rm", "completion"}
 
 
 def _have(shell: str) -> bool:
@@ -182,7 +182,7 @@ def test_fish_run_clustered_flags_hand_off(run_live, tmp_path: Path) -> None:
 def test_fish_clustered_scope_flags_forwarded(
     run_live, live_shim, tmp_path: Path
 ) -> None:
-    """`live ls -ag <TAB>` forwards both -a and -g; attached `-CDIR` scopes."""
+    """`live ps -ag <TAB>` forwards both -a and -g; attached `-CDIR` scopes."""
     test_env = live_shim
     proj = tmp_path / "projdir"
     other = tmp_path / "otherdir"
@@ -192,8 +192,8 @@ def test_fish_clustered_scope_flags_forwarded(
     payload = _payload(run_live, tmp_path, "fish")
 
     # Exited and out of scope: visible only with both -a and -g.
-    assert "clustered" not in _drive_fish(payload, "live ls ", env=test_env, cwd=other)
-    assert "clustered" in _drive_fish(payload, "live ls -ag ", env=test_env, cwd=other)
+    assert "clustered" not in _drive_fish(payload, "live ps ", env=test_env, cwd=other)
+    assert "clustered" in _drive_fish(payload, "live ps -ag ", env=test_env, cwd=other)
     session_cwd = str(proj.resolve())
     assert "clustered" in _drive_fish(
         payload, f"live cat -C{session_cwd} ", env=test_env, cwd=other
@@ -247,7 +247,7 @@ def test_fish_cwd_flag_completes_session_cwds(
     run_live(proj, "run", "-n", "scoped", "--", "sh", "-c", "echo a")
 
     payload = _payload(run_live, tmp_path, "fish")
-    candidates = _drive_fish(payload, "live ls -C ", env=test_env, cwd=tmp_path)
+    candidates = _drive_fish(payload, "live ps -C ", env=test_env, cwd=tmp_path)
     assert str(proj.resolve()) in candidates, candidates
 
 
@@ -337,7 +337,7 @@ def test_bash_run_clustered_flags_hand_off(run_live, tmp_path: Path) -> None:
 def test_bash_clustered_scope_flags_forwarded(
     run_live, live_shim, tmp_path: Path
 ) -> None:
-    """`live ls -ag <TAB>` forwards both -a and -g; attached `-CDIR` scopes."""
+    """`live ps -ag <TAB>` forwards both -a and -g; attached `-CDIR` scopes."""
     test_env = live_shim
     proj = tmp_path / "projdir"
     other = tmp_path / "otherdir"
@@ -350,8 +350,8 @@ def test_bash_clustered_scope_flags_forwarded(
         return _drive_bash(payload, words, cword, env=test_env, cwd=other)
 
     # Exited and out of scope: visible only with both -a and -g.
-    assert "clustered" not in drive(("live", "ls", ""), cword=2)
-    assert "clustered" in drive(("live", "ls", "-ag", ""), cword=3)
+    assert "clustered" not in drive(("live", "ps", ""), cword=2)
+    assert "clustered" in drive(("live", "ps", "-ag", ""), cword=3)
     session_cwd = str(proj.resolve())
     assert "clustered" in drive(("live", "cat", f"-C{session_cwd}", ""), cword=3)
 
@@ -398,10 +398,10 @@ def test_bash_older_than_value_suppresses_selectors(
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
-def test_bash_ls_completes_only_active_sessions(
+def test_bash_ps_completes_only_active_sessions(
     run_live, live_env, live_shim, wait_for, tmp_path: Path
 ) -> None:
-    """`live ls <TAB>` should suggest only running/hung sessions; `live ls -a <TAB>`
+    """`live ps <TAB>` should suggest only running/hung sessions; `live ps -a <TAB>`
     must include exited; `live rm <TAB>` must include exited regardless of -a."""
     test_env = live_shim
 
@@ -429,25 +429,25 @@ def test_bash_ls_completes_only_active_sessions(
     try:
         # Wait until the live session is registered as running.
         assert wait_for(
-            lambda: "liverun" in run_live(tmp_path, "ls", "--json").stdout,
+            lambda: "liverun" in run_live(tmp_path, "ps", "--json").stdout,
             timeout=8.0,
         ), "running session never appeared"
 
         payload = _payload(run_live, tmp_path, "bash")
 
-        # `live ls <TAB>` — active only.
-        ls_active = _drive_bash(
-            payload, ("live", "ls", ""), cword=2, env=test_env, cwd=tmp_path
+        # `live ps <TAB>` — active only.
+        ps_active = _drive_bash(
+            payload, ("live", "ps", ""), cword=2, env=test_env, cwd=tmp_path
         )
-        assert "liverun" in ls_active, ls_active
-        assert "deadname" not in ls_active, ls_active
+        assert "liverun" in ps_active, ps_active
+        assert "deadname" not in ps_active, ps_active
 
-        # `live ls -a <TAB>` — both.
-        ls_all = _drive_bash(
-            payload, ("live", "ls", "-a", ""), cword=3, env=test_env, cwd=tmp_path
+        # `live ps -a <TAB>` — both.
+        ps_all = _drive_bash(
+            payload, ("live", "ps", "-a", ""), cword=3, env=test_env, cwd=tmp_path
         )
-        assert "liverun" in ls_all, ls_all
-        assert "deadname" in ls_all, ls_all
+        assert "liverun" in ps_all, ps_all
+        assert "deadname" in ps_all, ps_all
 
         # `live rm <TAB>` — both (rm always passes -a internally).
         rm_all = _drive_bash(
@@ -517,7 +517,7 @@ def test_bash_numeric_values_dont_break_selector_completion(
 def test_bash_cwd_flag_completes_session_cwds(
     run_live, live_shim, tmp_path: Path
 ) -> None:
-    """`live ls -C <TAB>` offers the cwds of recorded sessions; a typed
+    """`live ps -C <TAB>` offers the cwds of recorded sessions; a typed
     `-C <dir>` scopes subsequent selector completion to that directory."""
     test_env = live_shim
     proj = tmp_path / "projdir"
@@ -531,8 +531,8 @@ def test_bash_cwd_flag_completes_session_cwds(
     def drive(words: tuple[str, ...], cword: int) -> set[str]:
         return _drive_bash(payload, words, cword, env=test_env, cwd=other)
 
-    # `live ls -C <TAB>` — the recorded session's cwd is offered.
-    assert session_cwd in drive(("live", "ls", "-C", ""), cword=3)
+    # `live ps -C <TAB>` — the recorded session's cwd is offered.
+    assert session_cwd in drive(("live", "ps", "-C", ""), cword=3)
 
     # `live cat <TAB>` from an unrelated dir — out of scope, no selectors.
     assert "scoped" not in drive(("live", "cat", ""), cword=2)
@@ -561,14 +561,14 @@ def test_bash_cwd_completion_prefers_session_cwds(
 
     # Empty prefix: session cwds only, no local-dir noise.
     offered = _drive_bash(
-        payload, ("live", "ls", "-C", ""), cword=3, env=test_env, cwd=tmp_path
+        payload, ("live", "ps", "-C", ""), cword=3, env=test_env, cwd=tmp_path
     )
     assert str(proj.resolve()) in offered, offered
     assert "localdir" not in offered, offered
 
     # Prefix matching no session cwd: plain directory completion.
     fallback = _drive_bash(
-        payload, ("live", "ls", "-C", "local"), cword=3, env=test_env, cwd=tmp_path
+        payload, ("live", "ps", "-C", "local"), cword=3, env=test_env, cwd=tmp_path
     )
     assert "localdir" in fallback, fallback
 
@@ -585,11 +585,11 @@ def test_fish_cwd_completion_prefers_session_cwds(
     run_live(proj, "run", "-n", "scoped", "--", "sh", "-c", "echo a")
     payload = _payload(run_live, tmp_path, "fish")
 
-    offered = _drive_fish(payload, "live ls -C ", env=test_env, cwd=tmp_path)
+    offered = _drive_fish(payload, "live ps -C ", env=test_env, cwd=tmp_path)
     assert str(proj.resolve()) in offered, offered
     assert not any(c.rstrip("/") == "localdir" for c in offered), offered
 
-    fallback = _drive_fish(payload, "live ls -C local", env=test_env, cwd=tmp_path)
+    fallback = _drive_fish(payload, "live ps -C local", env=test_env, cwd=tmp_path)
     assert any("localdir" in c for c in fallback), fallback
 
 
@@ -607,7 +607,7 @@ def test_bash_cwd_with_spaces_completes_and_scopes(
     session_cwd = str(proj.resolve())
 
     offered = _drive_bash(
-        payload, ("live", "ls", "-C", ""), cword=3, env=test_env, cwd=tmp_path
+        payload, ("live", "ps", "-C", ""), cword=3, env=test_env, cwd=tmp_path
     )
     assert session_cwd in offered, offered
 
@@ -754,7 +754,7 @@ def test_zsh_selectors_handle_clustered_flags(
         return _zsh_selectors(payload, test_env, other, *words)
 
     # Exited and out of scope: visible only with both -a and -g.
-    assert "zclust" not in selectors("ls")
-    assert "zclust" in selectors("ls", "-ag")
-    assert "zclust" in selectors("ls", "-aC", session_cwd)
-    assert "zclust" in selectors("ls", f"-aC{session_cwd}")
+    assert "zclust" not in selectors("ps")
+    assert "zclust" in selectors("ps", "-ag")
+    assert "zclust" in selectors("ps", "-aC", session_cwd)
+    assert "zclust" in selectors("ps", f"-aC{session_cwd}")

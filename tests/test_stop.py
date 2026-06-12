@@ -7,13 +7,13 @@ import os
 from pathlib import Path
 
 
-def _ls_entries(project: Path, run_live) -> list[dict]:
-    out = run_live(project, "ls", "-a", "--json").stdout
+def _ps_entries(project: Path, run_live) -> list[dict]:
+    out = run_live(project, "ps", "-a", "--json").stdout
     return [json.loads(ln) for ln in out.splitlines() if ln.strip()]
 
 
 def _statuses(project: Path, run_live) -> dict[str, str]:
-    return {e["id"]: e["status"] for e in _ls_entries(project, run_live)}
+    return {e["id"]: e["status"] for e in _ps_entries(project, run_live)}
 
 
 def test_stop_by_name_keeps_recording(

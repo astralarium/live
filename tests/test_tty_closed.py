@@ -3,7 +3,7 @@
 Platform note: Linux masters raise EIO once the last slave fd closes, so the
 recorder sees EOF while the child lives and stamps `ttyClosedAt`. BSD/macOS
 masters only EOF when the session leader exits, so the recorder-side marker
-is exercised end-to-end on Linux only; the ls/tail surfaces are tested
+is exercised end-to-end on Linux only; the ps/tail surfaces are tested
 cross-platform by planting the marker.
 """
 
@@ -25,7 +25,7 @@ _CLOSE_TTY = "exec >/dev/null 2>&1 0</dev/null"
 
 
 def _info(project: Path, run_live, selector: str) -> dict:
-    out = run_live(project, "ls", "-ag", "--json", selector)
+    out = run_live(project, "ps", "-ag", "--json", selector)
     rows = out.stdout.splitlines()
     return json.loads(rows[0]) if rows else {}
 
@@ -65,7 +65,7 @@ def test_tty_closed_session_lifecycle(
 
         info = _info(project, run_live, "ttyc")
         assert info["status"] == "running"  # heartbeats continue; not hung
-        human = run_live(project, "ls", "ttyc").stdout
+        human = run_live(project, "ps", "ttyc").stdout
         assert "(tty closed)" in human
 
         # tail -f drains and exits instead of waiting on a dry stream.
@@ -90,11 +90,11 @@ def test_tty_closed_session_lifecycle(
             rec.wait(timeout=5)
 
 
-def test_tty_closed_marker_surfaces_in_ls_and_ends_follow(
+def test_tty_closed_marker_surfaces_in_ps_and_ends_follow(
     project: Path, live_env, run_live, wait_for, spawn_run, wait_for_session
 ) -> None:
     # Cross-platform: plant the marker the recorder writes on Linux and
-    # assert the reader-side surfaces (ls suffix, JSON field, tail -f exit).
+    # assert the reader-side surfaces (ps suffix, JSON field, tail -f exit).
     spawn_run("-n", "marked")
     sess = wait_for_session()
     assert wait_for(lambda: read_meta(sess) is not None)
@@ -104,7 +104,7 @@ def test_tty_closed_marker_surfaces_in_ls_and_ends_follow(
     info = _info(project, run_live, "marked")
     assert info["status"] == "running"
     assert info["ttyClosedAt"] > 0
-    human = run_live(project, "ls", "marked").stdout
+    human = run_live(project, "ps", "marked").stdout
     assert "(tty closed)" in human
 
     t0 = time.time()
@@ -139,7 +139,7 @@ def test_background_survivor_marks_detached(project: Path, run_live) -> None:
     info = _info(project, run_live, "det")
     assert info["status"] == "exited"
     assert info.get("detached") is True
-    human = run_live(project, "ls", "-a", "det").stdout
+    human = run_live(project, "ps", "-a", "det").stdout
     assert "[detached]" in human
 
 
@@ -149,6 +149,6 @@ def test_clean_exit_is_not_detached(project: Path, run_live) -> None:
     assert info["status"] == "exited"
     assert "detached" not in info
     assert "ttyClosedAt" not in info
-    human = run_live(project, "ls", "-a", "plain").stdout
+    human = run_live(project, "ps", "-a", "plain").stdout
     assert "[detached]" not in human
     assert "(tty closed)" not in human

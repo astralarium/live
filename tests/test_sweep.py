@@ -85,7 +85,7 @@ def test_sweep_skips_fresh_session_without_lock_file(tmp_path: Path) -> None:
 
 def test_sweep_deletes_aged_startup_orphan(tmp_path: Path) -> None:
     """A lock-less dir past STARTUP_ORPHAN_SEC is a startup-crash orphan:
-    no meta makes it invisible to ls/rm, and no lock means the dead path
+    no meta makes it invisible to ps/rm, and no lock means the dead path
     can never stamp it — sweep must reclaim it directly."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(mode=0o700)

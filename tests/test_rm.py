@@ -49,13 +49,13 @@ def test_parse_age_rejects_bad_input(value: str) -> None:
 # ----- helpers -----
 
 
-def _ls_entries(project: Path, run_live) -> list[dict]:
-    out = run_live(project, "ls", "-a", "--json").stdout
+def _ps_entries(project: Path, run_live) -> list[dict]:
+    out = run_live(project, "ps", "-a", "--json").stdout
     return [json.loads(ln) for ln in out.splitlines() if ln.strip()]
 
 
-def _ls_names(project: Path, run_live) -> set[str | None]:
-    return {e.get("name") for e in _ls_entries(project, run_live)}
+def _ps_names(project: Path, run_live) -> set[str | None]:
+    return {e.get("name") for e in _ps_entries(project, run_live)}
 
 
 # ----- guard: bare rm and filter-only rm are errors -----
@@ -75,7 +75,7 @@ def test_rm_exited_alone_implies_all(project: Path, run_live) -> None:
 
     rm = run_live(project, "rm", "--exited")
     assert rm.returncode == 0
-    assert _ls_entries(project, run_live) == []
+    assert _ps_entries(project, run_live) == []
 
 
 def test_rm_untitled_alone_implies_exited_and_all(
@@ -95,7 +95,7 @@ def test_rm_untitled_alone_implies_exited_and_all(
     rm = run_live(project, "rm", "--untitled")
     assert rm.returncode == 0
 
-    remaining = _ls_entries(project, run_live)
+    remaining = _ps_entries(project, run_live)
     names = sorted(
         (e.get("name") for e in remaining), key=lambda x: (x is None, x or "")
     )
@@ -114,7 +114,7 @@ def test_all_deletes_everything(project: Path, run_live) -> None:
 
     rm = run_live(project, "rm", "--all")
     assert rm.returncode == 0
-    assert _ls_entries(project, run_live) == []
+    assert _ps_entries(project, run_live) == []
 
 
 # ----- --all + filters intersect -----
@@ -127,7 +127,7 @@ def test_all_and_exited_filter(project: Path, run_live) -> None:
     # Both already exited (sh -c returns immediately); --exited matches both.
     rm = run_live(project, "rm", "--all", "--exited")
     assert rm.returncode == 0
-    assert _ls_entries(project, run_live) == []
+    assert _ps_entries(project, run_live) == []
 
 
 def test_all_and_untitled(project: Path, run_live) -> None:
@@ -137,7 +137,7 @@ def test_all_and_untitled(project: Path, run_live) -> None:
 
     rm = run_live(project, "rm", "--all", "--untitled")
     assert rm.returncode == 0
-    assert _ls_names(project, run_live) == {"kept"}
+    assert _ps_names(project, run_live) == {"kept"}
 
 
 def test_all_with_older_than_keeps_recent(project: Path, run_live) -> None:
@@ -147,12 +147,12 @@ def test_all_with_older_than_keeps_recent(project: Path, run_live) -> None:
     # 1h-old cutoff: nothing qualifies (seconds-old sessions).
     rm = run_live(project, "rm", "--all", "--older-than", "1h")
     assert rm.returncode == 0
-    assert _ls_names(project, run_live) == {"a", "b"}
+    assert _ps_names(project, run_live) == {"a", "b"}
 
     # 0s cutoff = now: both exited sessions qualify.
     rm = run_live(project, "rm", "--all", "--older-than", "0s")
     assert rm.returncode == 0
-    assert _ls_entries(project, run_live) == []
+    assert _ps_entries(project, run_live) == []
 
 
 # ----- NAME selector + filters intersect -----
@@ -165,12 +165,12 @@ def test_name_with_older_than(project: Path, run_live) -> None:
     # Future cutoff: name matches but filter rejects → no deletes.
     rm = run_live(project, "rm", "alpha", "--older-than", "1h")
     assert rm.returncode == 0
-    assert _ls_names(project, run_live) == {"alpha", "beta"}
+    assert _ps_names(project, run_live) == {"alpha", "beta"}
 
     # Now cutoff: alpha gone, beta untouched (intersect bounded by NAME).
     rm = run_live(project, "rm", "alpha", "--older-than", "0s")
     assert rm.returncode == 0
-    assert _ls_names(project, run_live) == {"beta"}
+    assert _ps_names(project, run_live) == {"beta"}
 
 
 # ----- multi-NAME and running-session guard -----
@@ -185,7 +185,7 @@ def test_rm_name_matches_every_session_with_that_name(project: Path, run_live) -
     rm = run_live(project, "rm", "dup")
     assert rm.returncode == 0
     assert len(rm.stdout.strip().splitlines()) == 2
-    assert _ls_names(project, run_live) == {"keep"}
+    assert _ps_names(project, run_live) == {"keep"}
 
 
 def test_rm_running_session_refuses_without_force(
@@ -200,7 +200,7 @@ def test_rm_running_session_refuses_without_force(
     assert rm.returncode == 1
     assert "is running" in rm.stderr
     assert sess_dir.exists()
-    assert _ls_names(project, run_live) == {"alive"}
+    assert _ps_names(project, run_live) == {"alive"}
 
 
 # ----- -f / ignore-missing -----
@@ -212,7 +212,7 @@ def test_rm_f_ignores_missing_selector(project: Path, run_live) -> None:
     rm = run_live(project, "rm", "-f", "nonexistent")
     assert rm.returncode == 0
     assert rm.stderr == ""
-    assert _ls_names(project, run_live) == {"real"}
+    assert _ps_names(project, run_live) == {"real"}
 
 
 def test_rm_f_with_mix_of_missing_and_present(project: Path, run_live) -> None:
@@ -220,7 +220,7 @@ def test_rm_f_with_mix_of_missing_and_present(project: Path, run_live) -> None:
     run_live(project, "run", "-n", "real", "--", "sh", "-c", "echo r")
     rm = run_live(project, "rm", "-f", "nope", "real")
     assert rm.returncode == 0
-    assert _ls_names(project, run_live) == set()
+    assert _ps_names(project, run_live) == set()
 
 
 def test_rm_without_f_errors_on_missing_selector(project: Path, run_live) -> None:
@@ -252,7 +252,7 @@ def test_exited_and_untitled_intersect(
     rm = run_live(project, "rm", "--all", "--exited", "--untitled")
     assert rm.returncode == 0
 
-    remaining = _ls_entries(project, run_live)
+    remaining = _ps_entries(project, run_live)
     names = sorted(
         (e.get("name") for e in remaining), key=lambda x: (x is None, x or "")
     )

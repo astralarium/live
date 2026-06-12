@@ -2,7 +2,7 @@
 
 - [`live`](#live)
 - [`live run`](#live-run)
-- [`live ls`](#live-ls)
+- [`live ps`](#live-ps)
 - [`live cat`](#live-cat)
 - [`live head`](#live-head)
 - [`live tail`](#live-tail)
@@ -24,7 +24,7 @@ Live stream command line output.
 positional arguments:
   <verb>
     run                Run <cmd> under a PTY; record.
-    ls                 List sessions.
+    ps                 List sessions.
     cat                Concatenate session.
     head               Head session.
     tail               Tail session.
@@ -59,10 +59,10 @@ options:
   --geometry COLSxROWS  PTY size (default: the terminal's size, else 80x24).
 ```
 
-## `live ls`
+## `live ps`
 
 ```
-usage: live ls [-h] [-a] [-g | -C PATH] [--json] [selector]
+usage: live ps [-h] [-a] [-g | -C PATH] [--json] [selector]
 
 List recorded sessions.
 
@@ -265,7 +265,7 @@ Stop a running session:
   live stop <SELECTOR>
 
 List sessions:
-  live ls [-a] [--json] [<SELECTOR>]
+  live ps [-a] [--json] [<SELECTOR>]
 
 <SELECTOR>: UUID prefix or NAME (newest match)
 

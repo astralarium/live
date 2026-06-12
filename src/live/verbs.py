@@ -1,4 +1,4 @@
-"""CLI verbs: run, ls, cat, head, tail, rm, llms.txt, completion."""
+"""CLI verbs: run, ps, cat, head, tail, rm, llms.txt, completion."""
 
 from __future__ import annotations
 
@@ -176,7 +176,7 @@ def cmd_run(args) -> int:
             guard.release()
 
 
-def cmd_ls(args) -> int:
+def cmd_ps(args) -> int:
     cfg = load_config()
     sweep_all(cfg)
     sessions = list_sessions(cfg, cwd_filter=_scope_filter(args))
@@ -594,7 +594,7 @@ Stop a running session:
   live stop <SELECTOR>
 
 List sessions:
-  live ls [-a] [--json] [<SELECTOR>]
+  live ps [-a] [--json] [<SELECTOR>]
 
 <SELECTOR>: UUID prefix or NAME (newest match)
 
@@ -635,7 +635,7 @@ def cmd_completion_selectors(args) -> int:
     """Print selector candidates matching the typed prefix, one per line.
 
     Names are preferred; session ids are offered only when no name matches
-    the prefix. Plumbing for the shell completion scripts; scoped like `ls`.
+    the prefix. Plumbing for the shell completion scripts; scoped like `ps`.
     """
     cfg = load_config()
     sweep_all(cfg)

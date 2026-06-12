@@ -8,7 +8,7 @@ from pathlib import Path
 
 def _wait_exited(project: Path, run_live, wait_for, sid: str) -> None:
     def _status() -> str | None:
-        out = run_live(project, "ls", "-a", "--json").stdout
+        out = run_live(project, "ps", "-a", "--json").stdout
         for ln in out.splitlines():
             e = json.loads(ln)
             if e["id"] == sid:

@@ -156,22 +156,22 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     run_p.set_defaults(func=verbs.cmd_run)
 
-    # ls
-    ls_p = sub.add_parser(
-        "ls",
+    # ps
+    ps_p = sub.add_parser(
+        "ps",
         help="List sessions.",
         description="List recorded sessions.",
         formatter_class=_Formatter,
     )
-    ls_p.add_argument(
+    ps_p.add_argument(
         "-a", "--all", action="store_true", help="Include exited."
     ).completion_role = "all"
-    _add_scope_flags(ls_p)
-    ls_p.add_argument("--json", action="store_true", help="Emit NDJSON.")
+    _add_scope_flags(ps_p)
+    ps_p.add_argument("--json", action="store_true", help="Emit NDJSON.")
     _add_selector_arg(
-        ls_p, "selector", nargs="?", default=None, help="NAME or UUID-prefix filter."
+        ps_p, "selector", nargs="?", default=None, help="NAME or UUID-prefix filter."
     )
-    ls_p.set_defaults(func=verbs.cmd_ls, completion_sessions="mirror")
+    ps_p.set_defaults(func=verbs.cmd_ps, completion_sessions="mirror")
 
     # cat
     cat_p = sub.add_parser(

@@ -27,8 +27,8 @@ def _retained_stream_bytes(project: Path) -> int:
 
 
 def _session_info(project: Path, run_live) -> dict:
-    ls = run_live(project, "ls", "-a", "--json")
-    return json.loads(ls.stdout.splitlines()[0])
+    ps = run_live(project, "ps", "-a", "--json")
+    return json.loads(ps.stdout.splitlines()[0])
 
 
 # maxKb is a hard cap: retained <= max_bytes + one active segment.

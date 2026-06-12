@@ -28,10 +28,10 @@ Read output later with `cat`/`tail`. End it with `live stop`.
 ## Find sessions
 
 ```bash
-live ls         # active sessions in the current directory tree
-live ls -a      # include exited sessions
-live ls -ag     # all sessions, global scope
-live ls --json  # NDJSON, one session per line
+live ps         # active sessions in the current directory tree
+live ps -a      # include exited sessions
+live ps -ag     # all sessions, global scope
+live ps --json  # NDJSON, one session per line
 ```
 
 Select sessions by NAME (newest match) or UUID prefix. All verbs scope to

@@ -48,8 +48,8 @@ live run -dn server npm start  # run detached; print session UUID
 Inspect sessions:
 
 ```bash
-live ls              # active sessions
-live ls -ag          # all sessions
+live ps              # active sessions
+live ps -ag          # all sessions
 live less server     # interactive paging
 live tail -f server  # follow logs
 ```
