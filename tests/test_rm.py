@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from live.cli import _parse_age
+from live.timeutil import parse_age
 
 
-# ----- _parse_age unit tests -----
+# ----- parse_age unit tests -----
 
 
 @pytest.mark.parametrize(
@@ -23,14 +23,14 @@ from live.cli import _parse_age
 )
 def test_parse_age_duration(value: str, seconds: float) -> None:
     before = time.time()
-    cutoff = _parse_age(value)
+    cutoff = parse_age(value)
     after = time.time()
     assert before - seconds <= cutoff <= after - seconds
 
 
 @pytest.mark.parametrize("value", ["2026-01-01", "2026-01-01T12:00:00"])
 def test_parse_age_iso(value: str) -> None:
-    assert math.isclose(_parse_age(value), datetime.fromisoformat(value).timestamp())
+    assert math.isclose(parse_age(value), datetime.fromisoformat(value).timestamp())
 
 
 @pytest.mark.parametrize("value", ["7", "7days", "yesterday", "", "1d2h"])
@@ -38,7 +38,7 @@ def test_parse_age_rejects_bad_input(value: str) -> None:
     import argparse
 
     with pytest.raises(argparse.ArgumentTypeError):
-        _parse_age(value)
+        parse_age(value)
 
 
 # ----- helpers -----

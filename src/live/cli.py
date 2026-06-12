@@ -5,14 +5,12 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-import time
-from datetime import datetime
 from pathlib import Path
 
 from . import __version__
 from . import verbs
+from .timeutil import parse_age, parse_time
 
-_AGE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([dhms])\s*$")
 _NAME_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
 _GEOMETRY_RE = re.compile(r"^(\d{1,5})x(\d{1,5})$")
 
@@ -45,57 +43,6 @@ def _parse_cwd(value: str) -> Path:
     if not value:
         raise argparse.ArgumentTypeError("expected a directory path (got '')")
     return Path(value).expanduser().resolve()
-
-
-def _duration_secs(value: str) -> float | None:
-    """`7d`/`12h`/`30m`/`60s` -> seconds; None if not a duration."""
-    m = _AGE_RE.match(value)
-    if m is None:
-        return None
-    n = float(m.group(1))
-    unit = {"d": 86400, "h": 3600, "m": 60, "s": 1}[m.group(2)]
-    return n * unit
-
-
-def _parse_age(value: str) -> float:
-    """Return a cutoff in epoch seconds. Sessions exited before it count as older.
-
-    Duration form: `7d`, `12h`, `30m`, `60s` → `now - N`.
-    Absolute form: ISO date/datetime (`2026-01-01`, `2026-01-01T12:00:00`); naive
-    timestamps are interpreted as local time.
-    """
-    secs = _duration_secs(value)
-    if secs is not None:
-        return time.time() - secs
-    try:
-        return datetime.fromisoformat(value).timestamp()
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"expected duration (e.g. 7d, 12h, 30m, 60s) or ISO datetime (got {value!r})"
-        )
-
-
-def _parse_time(value: str) -> float:
-    """Return a reference time in epoch seconds.
-
-    Epoch form: `1781204738.513` (the trailer's `last-time`).
-    Duration form: `7d`, `12h`, `30m`, `60s` → `now - N`.
-    Absolute form: ISO date/datetime; naive timestamps are local time.
-    """
-    secs = _duration_secs(value)
-    if secs is not None:
-        return time.time() - secs
-    try:
-        return float(value)
-    except ValueError:
-        pass
-    try:
-        return datetime.fromisoformat(value).timestamp()
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"expected epoch seconds, duration (e.g. 30m), "
-            f"or ISO datetime (got {value!r})"
-        )
 
 
 def _count_or_cursor(prefix: str):
@@ -271,7 +218,7 @@ def _make_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "-t",
         "--time",
-        type=_parse_time,
+        type=parse_time,
         default=None,
         help="Lines with idx t <= T: epoch, duration (30m), or ISO datetime.",
     )
@@ -318,7 +265,7 @@ def _make_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "-t",
         "--time",
-        type=_parse_time,
+        type=parse_time,
         default=None,
         help="Lines with idx t > T: epoch, duration (30m), or ISO datetime.",
     )
@@ -393,7 +340,7 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     rm_p.add_argument(
         "--older-than",
-        type=_parse_age,
+        type=parse_age,
         default=None,
         dest="older_than",
         metavar="AGE",

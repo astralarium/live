@@ -26,6 +26,7 @@ from .reader import (
     tail_last,
 )
 from .paths import name_lock_path, within_cwd
+from .timeutil import fmt_duration
 from .recorder import STOP_KILL_DEADLINE_SEC, record, record_detached
 from .session import (
     STATUS_DEAD,
@@ -220,14 +221,14 @@ def cmd_ls(args) -> int:
             s.id[:8],
             s.meta.name or "-",
             _fmt_status(s, now),
-            _fmt_duration(now - s.meta.started_at),
+            fmt_duration(now - s.meta.started_at),
             _cwd_display(s.meta.cwd, scope),
             " ".join(s.meta.command),
         )
         for s in sessions
     ]
     widths = [
-        max(len(headers[i]), max(len(r[i]) for r in rows))
+        max(len(headers[i]), max((len(r[i]) for r in rows), default=0))
         for i in range(len(headers) - 1)
     ]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths) + "  {}"
@@ -237,27 +238,12 @@ def cmd_ls(args) -> int:
     return 0
 
 
-def _fmt_duration(secs: float) -> str:
-    """Compact kubectl-style duration: 45s, 5m12s, 2h30m, 3d4h."""
-    secs = max(0, int(secs))
-    if secs < 60:
-        return f"{secs}s"
-    m, s = divmod(secs, 60)
-    if m < 60:
-        return f"{m}m{s}s" if s else f"{m}m"
-    h, m = divmod(m, 60)
-    if h < 24:
-        return f"{h}h{m}m" if m else f"{h}h"
-    d, h = divmod(h, 24)
-    return f"{d}d{h}h" if h else f"{d}d"
-
-
 def _fmt_status(s: SessionInfo, now: float) -> str:
     """docker-ps style status: Up 5m / Up 5m (hung) / Exited (0) 2h ago / Dead."""
     if s.status in ("running", "hung"):
-        up = f"Up {_fmt_duration(now - s.meta.started_at)}"
+        up = f"Up {fmt_duration(now - s.meta.started_at)}"
         return f"{up} (hung)" if s.status == "hung" else up
-    ago = f" {_fmt_duration(now - s.exited_at)} ago" if s.exited_at else ""
+    ago = f" {fmt_duration(now - s.exited_at)} ago" if s.exited_at else ""
     if s.status == "exited":
         code = f" ({s.exit_code})" if s.exit_code is not None else ""
         return f"Exited{code}{ago}"
