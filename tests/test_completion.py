@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -38,10 +39,10 @@ def test_zsh_payload_enables_option_stacking(run_live, tmp_path: Path) -> None:
 
 
 def test_older_than_value_slot_stays_owned(run_live, tmp_path: Path) -> None:
-    """`rm --older-than` takes an AGE value; the zsh spec's `=` suffix and
-    fish's `-r` keep selectors out of that slot."""
+    """`rm --older-than` takes an AGE value; the zsh spec's trailing
+    `:message:` slot and fish's `-r` keep selectors out of that slot."""
     zsh = run_live(tmp_path, "completion-script", "zsh").stdout
-    assert "'--older-than=:" in zsh
+    assert re.search(r"--older-than=\[.+\]:.+:'", zsh)
     fish = run_live(tmp_path, "completion-script", "fish").stdout
     assert "-l older-than -r" in fish
 

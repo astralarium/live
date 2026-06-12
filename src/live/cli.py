@@ -67,6 +67,10 @@ def _count_or_cursor(prefix: str):
     return parse
 
 
+# `completion_role` on actions and the `completion_sessions` verb default
+# drive shell completion generation; see completion.py.
+
+
 def _add_cwd_arg(p, help_text: str) -> None:
     """Add `-C/--cwd` to a parser or argument group."""
     p.add_argument(
@@ -76,7 +80,12 @@ def _add_cwd_arg(p, help_text: str) -> None:
         default=None,
         metavar="PATH",
         help=help_text,
-    )
+    ).completion_role = "cwd"
+
+
+def _add_selector_arg(p, name: str, **kwargs) -> None:
+    """Add a positional completed with session selectors."""
+    p.add_argument(name, **kwargs).completion_role = "selector"
 
 
 def _add_scope_flags(p: argparse.ArgumentParser) -> None:
@@ -88,7 +97,7 @@ def _add_scope_flags(p: argparse.ArgumentParser) -> None:
         action="store_true",
         dest="global_",
         help="Global scope.",
-    )
+    ).completion_role = "global"
     _add_cwd_arg(g, "Directory scope (default: current directory).")
 
 
@@ -154,13 +163,15 @@ def _make_parser() -> argparse.ArgumentParser:
         description="List recorded sessions.",
         formatter_class=_Formatter,
     )
-    ls_p.add_argument("-a", "--all", action="store_true", help="Include exited.")
+    ls_p.add_argument(
+        "-a", "--all", action="store_true", help="Include exited."
+    ).completion_role = "all"
     _add_scope_flags(ls_p)
     ls_p.add_argument("--json", action="store_true", help="Emit NDJSON.")
-    ls_p.add_argument(
-        "selector", nargs="?", default=None, help="NAME or UUID-prefix filter."
+    _add_selector_arg(
+        ls_p, "selector", nargs="?", default=None, help="NAME or UUID-prefix filter."
     )
-    ls_p.set_defaults(func=verbs.cmd_ls)
+    ls_p.set_defaults(func=verbs.cmd_ls, completion_sessions="mirror")
 
     # cat
     cat_p = sub.add_parser(
@@ -179,7 +190,7 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Strip ANSI.",
     )
     ag.add_argument("--raw", action="store_true", dest="raw", help="Keep ANSI.")
-    cat_p.add_argument("selector", help="NAME or UUID-prefix.")
+    _add_selector_arg(cat_p, "selector", help="NAME or UUID-prefix.")
     cat_p.set_defaults(func=verbs.cmd_cat)
 
     # head
@@ -223,7 +234,7 @@ def _make_parser() -> argparse.ArgumentParser:
         default=None,
         help="Lines with idx t <= T: epoch, duration (30m), or ISO datetime.",
     )
-    head_p.add_argument("selector", help="NAME or UUID-prefix.")
+    _add_selector_arg(head_p, "selector", help="NAME or UUID-prefix.")
     head_p.set_defaults(func=verbs.cmd_head)
 
     # tail
@@ -270,7 +281,7 @@ def _make_parser() -> argparse.ArgumentParser:
         default=None,
         help="Lines with idx t > T: epoch, duration (30m), or ISO datetime.",
     )
-    tail_p.add_argument("selector", help="NAME or UUID-prefix.")
+    _add_selector_arg(tail_p, "selector", help="NAME or UUID-prefix.")
     tail_p.set_defaults(func=verbs.cmd_tail)
 
     # less
@@ -289,7 +300,7 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Strip ANSI.",
     )
     ag.add_argument("--raw", action="store_true", dest="raw", help="Keep ANSI.")
-    less_p.add_argument("selector", help="NAME or UUID-prefix.")
+    _add_selector_arg(less_p, "selector", help="NAME or UUID-prefix.")
     less_p.set_defaults(func=verbs.cmd_less)
 
     # stop
@@ -306,8 +317,10 @@ def _make_parser() -> argparse.ArgumentParser:
         dest="all_",
         help="Stop all running sessions.",
     )
-    stop_p.add_argument("selectors", nargs="*", help="NAME(s) or UUID-prefix(es).")
-    stop_p.set_defaults(func=verbs.cmd_stop)
+    _add_selector_arg(
+        stop_p, "selectors", nargs="*", help="NAME(s) or UUID-prefix(es)."
+    )
+    stop_p.set_defaults(func=verbs.cmd_stop, completion_sessions="running")
 
     # rm
     rm_p = sub.add_parser(
@@ -347,7 +360,7 @@ def _make_parser() -> argparse.ArgumentParser:
         metavar="AGE",
         help="Delete sessions exited before AGE: duration (7d, 12h, 30m, 60s) or ISO datetime.",
     )
-    rm_p.add_argument("selectors", nargs="*", help="NAME(s) or UUID-prefix(es).")
+    _add_selector_arg(rm_p, "selectors", nargs="*", help="NAME(s) or UUID-prefix(es).")
     rm_p.set_defaults(func=verbs.cmd_rm)
 
     # completion
