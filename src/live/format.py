@@ -35,7 +35,6 @@ IDX_RECORD = struct.Struct(">QdQ")
 IDX_RECORD_SIZE = IDX_RECORD.size
 
 _STREAM_RE = re.compile(r"^stream\.(\d+)\.log$")
-_IDX_RE = re.compile(r"^lines\.(\d+)\.idx$")
 
 
 def stream_name(seg: int) -> str:

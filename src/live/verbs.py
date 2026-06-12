@@ -296,7 +296,7 @@ def cmd_cat(args) -> int:
     res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
         return 1
-    info, cfg = res
+    info, _ = res
     result = cat_all(info.path)
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
@@ -311,7 +311,7 @@ def cmd_head(args) -> int:
     res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
         return 1
-    info, cfg = res
+    info, _ = res
 
     # args.lines / args.bytes_ are None or ("count" | "cursor", int).
     n_kind, n_val = args.lines if args.lines is not None else (None, None)
