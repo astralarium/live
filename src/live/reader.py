@@ -20,6 +20,7 @@ from .format import (
     Watermarks,
     compute_watermarks,
     idx_name,
+    idx_record_after,
     idx_record_at,
     first_idx_record,
     last_idx_record,
@@ -404,16 +405,13 @@ def _record_for_line(session_dir: Path, n: int) -> tuple[int, float, int] | None
 def _first_record_after_time(
     session_dir: Path, t: float
 ) -> tuple[int, float, int] | None:
-    """First record with timestamp > t (records are time-ordered). Reads
-    last-record probes per segment, then one full idx — the covering one."""
+    """First record with timestamp > t (records are time-ordered). One open
+    + a few interpolated probes per segment; non-covering segments cost two
+    probes (their first/last records bound the answer out)."""
     for seg in list_segments(session_dir):
-        idx_path = session_dir / idx_name(seg)
-        last = last_idx_record(idx_path)
-        if last is None or last[1] <= t:
-            continue
-        for rec in read_idx_records(idx_path):
-            if rec[1] > t:
-                return rec
+        rec = idx_record_after(session_dir / idx_name(seg), 1, t)
+        if rec is not None:
+            return rec
     return None
 
 
@@ -421,15 +419,11 @@ def _first_record_after_byte(
     session_dir: Path, b: int
 ) -> tuple[int, float, int] | None:
     """First record whose line starts past offset `b` (records are
-    byte-ordered). Same probe-then-scan shape as the time finder."""
+    byte-ordered). Same shape as the time finder."""
     for seg in list_segments(session_dir):
-        idx_path = session_dir / idx_name(seg)
-        last = last_idx_record(idx_path)
-        if last is None or last[2] <= b:
-            continue
-        for rec in read_idx_records(idx_path):
-            if rec[2] > b:
-                return rec
+        rec = idx_record_after(session_dir / idx_name(seg), 2, b)
+        if rec is not None:
+            return rec
     return None
 
 

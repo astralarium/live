@@ -272,6 +272,60 @@ def last_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
         return None
 
 
+def idx_record_after(
+    idx_path: Path, field: int, cut: float
+) -> tuple[int, float, int] | None:
+    """First record whose `field` exceeds `cut` — field 1 (timestamp) or
+    2 (byte offset); both are monotone over record position. One open, then
+    interpolation-guided probes with a halving fallback: ~2-3 positioned
+    reads when line sizes are even, O(log n) worst case. None when no record
+    qualifies or the file is missing."""
+    try:
+        with idx_path.open("rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            count = (size - IDX_HEADER_SIZE) // IDX_RECORD_SIZE
+            if count < 1:
+                return None
+
+            def probe(i: int) -> tuple[int, float, int] | None:
+                f.seek(IDX_HEADER_SIZE + i * IDX_RECORD_SIZE)
+                buf = f.read(IDX_RECORD_SIZE)
+                if len(buf) < IDX_RECORD_SIZE:
+                    return None
+                return IDX_RECORD.unpack(buf)
+
+            first = probe(0)
+            if first is None:
+                return None
+            if first[field] > cut:
+                return first
+            last = probe(count - 1)
+            if last is None or last[field] <= cut:
+                return None
+            # Bracket invariant: records[lo][field] <= cut < records[hi][field],
+            # so hi_v > lo_v always holds and the first qualifying record is hi.
+            lo, lo_v = 0, first[field]
+            hi, hi_v, hi_rec = count - 1, last[field], last
+            interpolations = 2  # skewed line sizes mislead; halve after these
+            while hi - lo > 1:
+                if interpolations:
+                    interpolations -= 1
+                    frac = (cut - lo_v) / (hi_v - lo_v)
+                    mid = lo + max(1, min(hi - lo - 1, int(frac * (hi - lo))))
+                else:
+                    mid = (lo + hi) // 2
+                rec = probe(mid)
+                if rec is None:
+                    return None
+                if rec[field] > cut:
+                    hi, hi_v, hi_rec = mid, rec[field], rec
+                else:
+                    lo, lo_v = mid, rec[field]
+            return hi_rec
+    except FileNotFoundError:
+        return None
+
+
 @dataclass(frozen=True)
 class Watermarks:
     first_line: int  # first fully-retained line; 0 if none

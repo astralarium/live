@@ -19,6 +19,7 @@ from live.format import (
     Meta,
     Watermarks,
     count_complete_lines,
+    idx_record_after,
     idx_record_count,
     last_idx_record,
     pack_idx_header,
@@ -246,6 +247,57 @@ def test_last_idx_record_header_only(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
     p.write_bytes(pack_idx_header(0, 0))
     assert last_idx_record(p) is None
+
+
+def _write_idx(p, offsets: list[int]) -> None:
+    """Idx with line n at byte offsets[n-1], timestamp 1000+n."""
+    recs = b"".join(IDX_RECORD.pack(n, 1000.0 + n, b) for n, b in enumerate(offsets, 1))
+    p.write_bytes(pack_idx_header(0, 0) + recs)
+
+
+def test_idx_record_after_uniform_offsets(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    _write_idx(p, [n * 100 for n in range(100)])  # lines 1..100 every 100 bytes
+    assert idx_record_after(p, 2, 0) == (2, 1002.0, 100)
+    assert idx_record_after(p, 2, 4950) == (51, 1051.0, 5000)
+    assert idx_record_after(p, 1, 1050.5) == (51, 1051.0, 5000)
+
+
+def test_idx_record_after_boundaries(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    _write_idx(p, [n * 100 for n in range(100)])
+    assert idx_record_after(p, 2, -1) == (1, 1001.0, 0)  # below first: first wins
+    assert idx_record_after(p, 2, 9900) is None  # cut at last offset: strict >
+    assert idx_record_after(p, 1, 1100.0) is None
+    assert idx_record_after(p, 2, 5000) == (52, 1052.0, 5100)  # exact hit excluded
+
+
+def test_idx_record_after_skewed_offsets(tmp_path) -> None:
+    # Interpolation's guess is badly misled (one huge line among tiny ones);
+    # the halving fallback must still converge to the exact record.
+    p = tmp_path / "lines.0000.idx"
+    offsets = list(range(50)) + [60_000 + n for n in range(50)]
+    _write_idx(p, offsets)
+    assert idx_record_after(p, 2, 48) == (50, 1050.0, 49)
+    assert idx_record_after(p, 2, 49) == (51, 1051.0, 60_000)
+    assert idx_record_after(p, 2, 59_999) == (51, 1051.0, 60_000)
+    assert idx_record_after(p, 2, 60_010) == (62, 1062.0, 60_011)
+
+
+def test_idx_record_after_ignores_torn_append(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    rec1 = IDX_RECORD.pack(1, 1000.0, 0)
+    rec2 = IDX_RECORD.pack(2, 1001.0, 10)
+    p.write_bytes(pack_idx_header(0, 0) + rec1 + rec2 + rec1[:7])
+    assert idx_record_after(p, 2, 0) == (2, 1001.0, 10)
+    assert idx_record_after(p, 2, 10) is None  # torn record never qualifies
+
+
+def test_idx_record_after_header_only_and_missing(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    p.write_bytes(pack_idx_header(0, 0))
+    assert idx_record_after(p, 2, 0) is None
+    assert idx_record_after(tmp_path / "nope.idx", 2, 0) is None
 
 
 # ----- lock probing -----

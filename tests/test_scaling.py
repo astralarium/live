@@ -18,6 +18,7 @@ from live.reader import (
     cat_all,
     head_first,
     lines_since,
+    lines_since_time,
     lines_until_time,
     load_stats,
     tail_last,
@@ -181,6 +182,28 @@ def test_head_t_bounds_load_to_cut(tmp_path: Path, opened) -> None:
     assert _drain(res) == info["data"][: 150 * LINE_LEN]
     assert res.last_line == 150
     assert _streams(opened) <= {stream_name(s) for s in range(0, 4)} | {LAST_SEG}
+
+
+def test_finders_bisect_without_full_idx_read(tmp_path: Path, monkeypatch) -> None:
+    """Time/byte record finders bisect the covering idx with positioned
+    reads; the full-idx loader must stay off every happy path."""
+    info = _build_session(tmp_path)
+
+    def banned(*_a, **_k):
+        raise AssertionError("full idx read in a seek-read path")
+
+    monkeypatch.setattr("live.reader.read_idx_records", banned)
+
+    res = lines_since_time(tmp_path, from_time=1000.0 + 150.5)  # lines 151..
+    assert _drain(res) == info["data"][150 * LINE_LEN :]
+
+    res = lines_until_time(tmp_path, until_t=1000.0 + 150.5)  # lines 1..150
+    assert _drain(res) == info["data"][: 150 * LINE_LEN]
+    assert res.last_line == 150
+
+    res = head_first(tmp_path, c_bytes=150 * LINE_LEN)  # byte finder
+    assert _drain(res) == info["data"][: 150 * LINE_LEN]
+    assert res.last_line == 150
 
 
 def test_cat_streams_everything(tmp_path: Path, opened) -> None:
