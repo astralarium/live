@@ -20,7 +20,9 @@ def test_stop_by_name_keeps_recording(
     project: Path, run_live, spawn_run, wait_for
 ) -> None:
     proc = spawn_run("-n", "srv")
-    assert wait_for(lambda: "running" in _statuses(project, run_live).values())
+    assert wait_for(
+        lambda: "running" in _statuses(project, run_live).values(), timeout=10.0
+    )
 
     res = run_live(project, "stop", "srv")
     [sid] = res.stdout.split()

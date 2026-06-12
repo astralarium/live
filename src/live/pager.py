@@ -26,14 +26,13 @@ from .ansi import (
     DEFAULT_STYLE,
     Style,
     parse_spans,
-    strip_ansi,
     strip_ansi_str,
     to_base16,
 )
 from .config import Config
 from .format import LOCK_NAME, idx_name, list_segments, stream_name
 from .lock import probe_held
-from .reader import cat_all, load_stream_view
+from .reader import cat_all, load_stream_view, write_stdout
 from .session import SessionInfo, session_info
 from .watcher import new_watcher
 
@@ -1180,13 +1179,7 @@ def run_pager(info: SessionInfo, cfg: Config, *, strip: bool) -> int:
 
 
 def _cat_fallback(info: SessionInfo, *, strip: bool) -> int:
-    result = cat_all(info.path)
-    out = strip_ansi(result.stdout) if strip else result.stdout
-    try:
-        sys.stdout.buffer.write(out)
-        sys.stdout.buffer.flush()
-    except BrokenPipeError:
-        pass
+    write_stdout(cat_all(info.path), strip)
     return 0
 
 

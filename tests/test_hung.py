@@ -25,6 +25,10 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
     assert wait_for(lambda: idx.exists() and idx.stat().st_size > 0, timeout=8.0), (
         "no indexed line ever appeared"
     )
+    # The idx exists before meta.json (setup order: lock, segments, meta);
+    # `ls` only lists sessions with meta, so wait for it or the read below
+    # can see an empty listing.
+    assert wait_for(lambda: (sess_dir / "meta.json").exists(), timeout=8.0)
     # Freeze the recorder so no heartbeat or trailing startup write can
     # re-touch the idx after the backdate. A stopped process still holds the
     # lock, which is exactly the "hung" shape: alive but silent.

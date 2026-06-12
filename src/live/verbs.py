@@ -10,7 +10,6 @@ import sys
 import time
 from pathlib import Path
 
-from .ansi import strip_ansi
 from .config import Config, load_config
 from .format import LOCK_NAME
 from .lock import HeldLock, LockTimeout, kill_pid, probe_held, read_lock_pid
@@ -25,6 +24,7 @@ from .reader import (
     lines_until_time,
     should_strip_ansi,
     tail_last,
+    write_stdout,
 )
 from .paths import name_lock_path, within_cwd
 from .timeutil import fmt_duration
@@ -62,14 +62,7 @@ def _emit_read_result(
     strip: bool,
 ) -> None:
     """Apply ANSI rules, print stdout, emit ordered stderr lines + trailer."""
-    out = result.stdout
-    if strip:
-        out = strip_ansi(out)
-    try:
-        sys.stdout.buffer.write(out)
-        sys.stdout.buffer.flush()
-    except BrokenPipeError:
-        pass
+    write_stdout(result, strip)
 
     if not verbose:
         return
@@ -396,12 +389,9 @@ def cmd_tail(args) -> int:
     )
 
     if args.follow:
-        # Emit the initial slice without verbose trailer, then enter follow mode.
-        out = strip_ansi(result.stdout) if strip else result.stdout
-        try:
-            sys.stdout.buffer.write(out)
-            sys.stdout.buffer.flush()
-        except BrokenPipeError:
+        # Emit the initial slice without verbose trailer, then enter follow
+        # mode; draining finalizes `emitted_byte`, the follow cursor.
+        if not write_stdout(result, strip):
             return 0
         from .follow import follow_session
 
