@@ -13,7 +13,7 @@ from pathlib import Path
 from .ansi import strip_ansi
 from .config import Config, load_config
 from .format import LOCK_NAME
-from .lock import HeldLock, kill_pid, probe_held, read_lock_pid
+from .lock import HeldLock, LockTimeout, kill_pid, probe_held, read_lock_pid
 from .reader import (
     ReadResult,
     bytes_since,
@@ -116,7 +116,13 @@ def cmd_run(args) -> int:
     # Named runs serialize on a global lock spanning the conflict check and
     # session creation (meta is written before release), so concurrent
     # `run -n NAME` can't both pass the check or hide mid-startup.
-    guard = HeldLock(name_lock_path()) if args.name is not None else None
+    guard = None
+    if args.name is not None:
+        try:
+            guard = HeldLock(name_lock_path())
+        except LockTimeout as e:
+            _err(f"run: {e}")
+            return 1
     try:
         if args.name is not None:
             # Conflict when either cwd contains the other — i.e. some scope
@@ -148,7 +154,15 @@ def cmd_run(args) -> int:
 
         if args.detach:
             session_id, error = record_detached(
-                cfg, cmd, name=args.name, geometry=args.geometry, cwd=cwd
+                cfg,
+                cmd,
+                name=args.name,
+                geometry=args.geometry,
+                cwd=cwd,
+                # The recorder must not hold a copy of the name-lock fd: if
+                # this CLI dies before its release, that copy would keep the
+                # lock held for the session's whole lifetime.
+                after_fork=guard.close_inherited if guard is not None else None,
             )
             if error is not None:
                 _err(f"run: {error}")
@@ -198,6 +212,10 @@ def cmd_ls(args) -> int:
                 obj["exitedAt"] = s.exited_at
             if s.exit_code is not None:
                 obj["exitCode"] = s.exit_code
+            if s.meta.tty_closed_at is not None:
+                obj["ttyClosedAt"] = s.meta.tty_closed_at
+            if s.meta.detached:
+                obj["detached"] = True
             obj.update(
                 {
                     "lastActivity": s.last_activity,
@@ -240,15 +258,21 @@ def cmd_ls(args) -> int:
 
 
 def _fmt_status(s: SessionInfo, now: float) -> str:
-    """docker-ps style status: Running 5m / Running 5m (hung) / Exited (0) 2h ago / Dead."""
+    """docker-ps style status: Running 5m / Running 5m (hung) / Running 5m
+    (tty closed) / Exited (0) 2h ago [detached] / Dead."""
     if s.status in ("running", "hung"):
         up = f"Running {fmt_duration(now - s.meta.started_at)}"
-        return f"{up} (hung)" if s.status == "hung" else up
+        if s.status == "hung":
+            return f"{up} (hung)"
+        if s.meta.tty_closed_at is not None:
+            return f"{up} (tty closed)"
+        return up
     ago = f" {fmt_duration(now - s.exited_at)} ago" if s.exited_at else ""
+    tag = " [detached]" if s.meta.detached else ""
     if s.status == "exited":
         code = f" ({s.exit_code})" if s.exit_code is not None else ""
-        return f"Exited{code}{ago}"
-    return f"Dead{ago}"  # inconsistent exit records
+        return f"Exited{code}{ago}{tag}"
+    return f"Dead{ago}{tag}"  # inconsistent exit records
 
 
 def _cwd_display(meta_cwd: str, scope: Path | None) -> str:
@@ -278,7 +302,7 @@ def _get_session_or_fail(
 def cmd_cat(args) -> int:
     res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
-        return 2
+        return 1
     info, cfg = res
     result = cat_all(info.path)
     strip = should_strip_ansi(
@@ -293,7 +317,7 @@ def cmd_cat(args) -> int:
 def cmd_head(args) -> int:
     res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
-        return 2
+        return 1
     info, cfg = res
 
     # args.lines / args.bytes_ are None or ("count" | "cursor", int).
@@ -326,7 +350,7 @@ def cmd_head(args) -> int:
 def cmd_tail(args) -> int:
     res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
-        return 2
+        return 1
     info, cfg = res
 
     # args.lines / args.bytes_ are None or ("count" | "cursor", int).
@@ -341,20 +365,20 @@ def cmd_tail(args) -> int:
     if is_line_cursor:
         result = lines_since(info.path, from_line=n_val)
         # Caught-up polls (n_val == next-line) are silent. Warn only when the
-        # cursor is past the session's tip.
-        if n_val > result.last_line + 1 and result.last_line:
+        # cursor is past the session's tip — empty sessions included.
+        if n_val > result.last_line + 1:
             result.stderr_lines.append(
                 f"from-line={n_val} > next-line={result.last_line + 1}; check id"
             )
     elif is_byte_cursor:
         result = bytes_since(info.path, from_byte=c_val)
-        if c_val > result.next_byte and result.next_byte:
+        if c_val > result.next_byte:
             result.stderr_lines.append(
                 f"from-byte={c_val} > next-byte={result.next_byte}; check id"
             )
     elif is_time_cursor:
         result = lines_since_time(info.path, from_time=args.time)
-        if args.time > result.last_time and result.last_time:
+        if args.time > result.last_time:
             result.stderr_lines.append(
                 f"from-time={args.time:.3f} > last-time={result.last_time:.3f}; check id"
             )
@@ -386,6 +410,7 @@ def cmd_tail(args) -> int:
             info=info,
             initial_byte=result.emitted_byte,
             strip=strip,
+            verbose=args.verbose,
         )
 
     _emit_read_result(result, info, verbose=args.verbose, strip=strip)
@@ -395,7 +420,7 @@ def cmd_tail(args) -> int:
 def cmd_less(args) -> int:
     res = _get_session_or_fail(args.selector, _scope_filter(args))
     if res is None:
-        return 2
+        return 1
     info, cfg = res
     strip = should_strip_ansi(
         explicit_strip=args.strip_ansi,
@@ -507,21 +532,27 @@ def cmd_stop(args) -> int:
             seen.add(s.id)
             targets.append(s)
     try:
-        _stop_recorders(targets)
+        failed = _stop_recorders(targets)
     except Exception as e:
         _err(f"stop: {e}")
         return 1
+    failed_ids = {s.id for s in failed}
+    for s in failed:
+        _err(f"stop {s.id[:8]}: could not signal recorder")
     for s in targets:
-        print(s.id)
+        if s.id not in failed_ids:
+            print(s.id)
 
-    return 1 if any_error else 0
+    return 1 if any_error or failed else 0
 
 
-def _stop_recorders(infos: list[SessionInfo]) -> None:
+def _stop_recorders(infos: list[SessionInfo]) -> list[SessionInfo]:
     """SIGTERM each recorder; SIGKILL any whose flock isn't released within
     STOP_KILL_DEADLINE_SEC. One shared deadline, so N stuck sessions cost
-    one wait, not N."""
+    one wait, not N. Returns sessions whose recorder could not be signaled
+    (e.g. another user's process)."""
     pending: list[tuple[Path, int]] = []
+    failed: list[SessionInfo] = []
     for info in infos:
         lock_path = info.path / LOCK_NAME
         # Re-probe liveness now: the caller's status snapshot may be stale,
@@ -532,7 +563,9 @@ def _stop_recorders(infos: list[SessionInfo]) -> None:
         pid = read_lock_pid(lock_path)
         if not pid:
             continue
-        kill_pid(pid, signal.SIGTERM)
+        if not kill_pid(pid, signal.SIGTERM):
+            failed.append(info)
+            continue
         pending.append((lock_path, pid))
 
     deadline = time.time() + STOP_KILL_DEADLINE_SEC
@@ -545,6 +578,7 @@ def _stop_recorders(infos: list[SessionInfo]) -> None:
         kill_pid(pid, signal.SIGKILL)
     if pending:
         time.sleep(0.2)
+    return failed
 
 
 def _delete_session(info: SessionInfo, *, force: bool) -> None:
@@ -553,7 +587,9 @@ def _delete_session(info: SessionInfo, *, force: bool) -> None:
     if probe_held(lock_path) is True:
         if not force:
             raise RuntimeError(f"session {info.id[:8]} is running (use -f)")
-        _stop_recorders([info])
+        if _stop_recorders([info]):
+            # Never delete under a still-live writer we couldn't stop.
+            raise RuntimeError("could not signal recorder")
     shutil.rmtree(info.path, ignore_errors=True)
 
 
@@ -585,6 +621,8 @@ stderr: `live` verbose output (-v):
   "live: exit-code=<code>" or "live: exit=inconsistent"
 - hung: alive, but stalled
   "live: status=hung last-activity=<s>"
+- tty closed: output detached but child is running
+  "live: tty closed; no further output"
 - gap: rotation dropped data
   "live: dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)"
 - partial: partial line (eg. progress bar)
@@ -594,7 +632,7 @@ Check for new data:
   live tail -vn +<N> <SELECTOR>  # by line
   live tail -vc +<B> <SELECTOR>  # by byte
 
-Reset cursor to 0 if <uuid> changes (new session)
+Reset cursor to 1 if <uuid> changes (new session)
 """
 
 
@@ -636,11 +674,8 @@ def cmd_completion_cwds(args) -> int:
 def cmd_completion_script(args) -> int:
     from .completion import script_for
 
-    payload = script_for(args.shell)
-    if payload is None:
-        _err(f"unknown shell: {args.shell}")
-        return 2
-    sys.stdout.write(payload)
+    # argparse `choices` guarantees a known shell.
+    sys.stdout.write(script_for(args.shell))
     return 0
 
 

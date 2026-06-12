@@ -18,8 +18,13 @@ from live.timeutil import parse_age
 
 @pytest.mark.parametrize(
     "value,seconds",
-    [("7d", 7 * 86400), ("12h", 12 * 3600), ("30m", 30 * 60), ("60s", 60),
-     ("1.5d", 1.5 * 86400)],
+    [
+        ("7d", 7 * 86400),
+        ("12h", 12 * 3600),
+        ("30m", 30 * 60),
+        ("60s", 60),
+        ("1.5d", 1.5 * 86400),
+    ],
 )
 def test_parse_age_duration(value: str, seconds: float) -> None:
     before = time.time()
@@ -33,7 +38,7 @@ def test_parse_age_iso(value: str) -> None:
     assert math.isclose(parse_age(value), datetime.fromisoformat(value).timestamp())
 
 
-@pytest.mark.parametrize("value", ["7", "7days", "yesterday", "", "1d2h"])
+@pytest.mark.parametrize("value", ["7", "7days", "yesterday", "", "2h1d"])
 def test_parse_age_rejects_bad_input(value: str) -> None:
     import argparse
 
@@ -91,7 +96,9 @@ def test_rm_untitled_alone_implies_exited_and_all(
     assert rm.returncode == 0
 
     remaining = _ls_entries(project, run_live)
-    names = sorted((e.get("name") for e in remaining), key=lambda x: (x is None, x or ""))
+    names = sorted(
+        (e.get("name") for e in remaining), key=lambda x: (x is None, x or "")
+    )
     statuses = {e["status"] for e in remaining}
     assert names == ["named", None]
     assert statuses == {"exited", "running"}
@@ -234,8 +241,8 @@ def test_exited_and_untitled_intersect(
     Of {named-exited, unnamed-exited, unnamed-running}, only the unnamed-exited
     session matches BOTH filters."""
     run_live(project, "run", "-n", "named", "--", "sh", "-c", "echo x")  # named exited
-    run_live(project, "run", "--", "sh", "-c", "echo y")                 # unnamed exited
-    spawn_run()                                                          # unnamed running
+    run_live(project, "run", "--", "sh", "-c", "echo y")  # unnamed exited
+    spawn_run()  # unnamed running
 
     sessions = project / ".live" / "sessions"
     assert wait_for(
@@ -246,7 +253,9 @@ def test_exited_and_untitled_intersect(
     assert rm.returncode == 0
 
     remaining = _ls_entries(project, run_live)
-    names = sorted((e.get("name") for e in remaining), key=lambda x: (x is None, x or ""))
+    names = sorted(
+        (e.get("name") for e in remaining), key=lambda x: (x is None, x or "")
+    )
     statuses = {e["status"] for e in remaining}
     assert names == ["named", None]
     assert statuses == {"exited", "running"}

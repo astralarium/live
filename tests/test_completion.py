@@ -11,11 +11,14 @@ import pytest
 VERBS = ("run", "ls", "cat", "head", "tail", "less", "rm", "completion-script")
 
 
-@pytest.mark.parametrize("shell,marker", [
-    ("bash", "complete -F"),
-    ("zsh", "#compdef live"),
-    ("fish", "complete -c live"),
-])
+@pytest.mark.parametrize(
+    "shell,marker",
+    [
+        ("bash", "complete -F"),
+        ("zsh", "#compdef live"),
+        ("fish", "complete -c live"),
+    ],
+)
 def test_completion_payload_contains_shell_hookup(
     shell: str, marker: str, run_live, tmp_path: Path
 ) -> None:
@@ -24,6 +27,23 @@ def test_completion_payload_contains_shell_hookup(
     assert marker in out, f"{shell}: missing hookup marker {marker!r}"
     for verb in VERBS:
         assert verb in out, f"{shell}: missing verb {verb!r}"
+
+
+def test_zsh_payload_enables_option_stacking(run_live, tmp_path: Path) -> None:
+    """Without `_arguments -s`, clustered short flags (`-dn`, `-ag`) are
+    mistaken for the wrapped command / a selector."""
+    out = run_live(tmp_path, "completion-script", "zsh").stdout
+    assert "_arguments -s -S" in out  # run
+    assert out.count("_arguments -s") >= 8  # run + the selector verbs
+
+
+def test_older_than_value_slot_stays_owned(run_live, tmp_path: Path) -> None:
+    """`rm --older-than` takes an AGE value; the zsh spec's `=` suffix and
+    fish's `-r` keep selectors out of that slot."""
+    zsh = run_live(tmp_path, "completion-script", "zsh").stdout
+    assert "'--older-than=:" in zsh
+    fish = run_live(tmp_path, "completion-script", "fish").stdout
+    assert "-l older-than -r" in fish
 
 
 def test_completion_selectors_lists_names_and_ids(project: Path, run_live) -> None:
@@ -67,11 +87,14 @@ def test_completion_cwds_lists_distinct_session_cwds(project: Path, run_live) ->
     assert out.count(str(a.resolve())) == 1, out
 
 
-@pytest.mark.parametrize("shell,rel", [
-    ("bash", ".local/share/bash-completion/completions/live"),
-    ("zsh", ".local/share/zsh/site-functions/_live"),
-    ("fish", ".config/fish/completions/live.fish"),
-])
+@pytest.mark.parametrize(
+    "shell,rel",
+    [
+        ("bash", ".local/share/bash-completion/completions/live"),
+        ("zsh", ".local/share/zsh/site-functions/_live"),
+        ("fish", ".config/fish/completions/live.fish"),
+    ],
+)
 def test_update_shell_writes_completion(
     shell: str, rel: str, run_live, live_env, tmp_path: Path
 ) -> None:

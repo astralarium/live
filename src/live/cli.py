@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from . import verbs
+from .config import ConfigError
 from .timeutil import parse_age, parse_time
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
@@ -260,7 +261,7 @@ def _make_parser() -> argparse.ArgumentParser:
         metavar="BYTES",
         type=_count_or_cursor("+"),
         default=None,
-        help="Last K bytes; +K for bytes after offset K.",
+        help="Last K bytes; +K for bytes from position K.",
     )
     mode.add_argument(
         "-t",
@@ -425,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     try:
         return parsed.func(parsed)
+    except ConfigError as e:
+        # Every verb loads config; fail hard on a bad file rather than
+        # silently running with defaults.
+        print(f"live: {e}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         return 130
 

@@ -35,9 +35,13 @@ def last_sweep_time() -> float:
 
 
 def should_sweep(*, now: float | None = None) -> bool:
-    """True if `SWEEP_INTERVAL_SEC` has elapsed since the last sweep."""
+    """True if `SWEEP_INTERVAL_SEC` has elapsed since the last sweep. A stamp
+    in the future (clock stepped backwards) must not disable sweeping."""
     t = now if now is not None else time.time()
-    return t - last_sweep_time() >= SWEEP_INTERVAL_SEC
+    last = last_sweep_time()
+    if last > t:
+        return True
+    return t - last >= SWEEP_INTERVAL_SEC
 
 
 def mark_swept(now: float | None = None) -> None:

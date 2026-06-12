@@ -14,7 +14,14 @@ def _only_session(project: Path) -> dict:
 
 def test_run_propagates_nonzero_exit_code(project: Path, run_live) -> None:
     proc = run_live(
-        project, "run", "-n", "x", "--", "sh", "-c", "exit 42",
+        project,
+        "run",
+        "-n",
+        "x",
+        "--",
+        "sh",
+        "-c",
+        "exit 42",
         check=False,
     )
     assert proc.returncode == 42
@@ -30,7 +37,10 @@ def test_run_command_not_found_exits_127(project: Path, run_live) -> None:
     """`pty.fork`'d child can't `execvp` -> os._exit(127); parent reaps and
     propagates the status."""
     proc = run_live(
-        project, "run", "--", "definitely-not-a-real-cmd-xyz-12345",
+        project,
+        "run",
+        "--",
+        "definitely-not-a-real-cmd-xyz-12345",
         check=False,
     )
     assert proc.returncode == 127

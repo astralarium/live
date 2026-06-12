@@ -2,7 +2,7 @@
 
 Layered for testability:
   - `PagerState`: pure in-memory view model (scroll, seen benchmark, follow flag).
-  - `load_lines`: snapshot the session into `Line` records.
+  - `load_lines`: snapshot the session into `Line` records + partial tail.
   - `run_pager`: curses I/O loop driving state + rendering.
 
 When stdout is not a TTY, `run_pager` degrades to cat semantics.
@@ -55,6 +55,18 @@ class Line:
     end_byte: int
 
 
+@dataclass(frozen=True)
+class PartialTail:
+    """Unterminated bytes past the last indexed line (no idx record yet).
+
+    `text` is empty when there is no partial tail; `end_byte` is the lifetime
+    offset just past the tail (the stream tip, matching `tail -c` cursors).
+    """
+
+    text: bytes
+    end_byte: int
+
+
 @dataclass
 class _ScanCursor:
     """Walk position shared between the initial snapshot and incremental drains.
@@ -68,12 +80,16 @@ class _ScanCursor:
     next_byte: int = 0
 
 
-def _scan_from(session_dir: Path, cursor: _ScanCursor) -> list[Line]:
-    """Return new complete Lines past `cursor`, advancing `cursor`.
+def _scan_from(
+    session_dir: Path, cursor: _ScanCursor
+) -> tuple[list[Line], PartialTail]:
+    """Return (new complete Lines past `cursor`, current partial tail),
+    advancing `cursor`.
 
     Lines are sliced by idx byte offsets, so a line spanning segments comes
     back whole; one whose head was retained away between drains comes back
-    truncated rather than dropped.
+    truncated rather than dropped. The partial tail is whatever sits past the
+    last indexed line (empty `text` when the stream ends at a line boundary).
     """
     view = load_stream_view(session_dir, from_byte=cursor.next_byte)
     out: list[Line] = []
@@ -89,15 +105,13 @@ def _scan_from(session_dir: Path, cursor: _ScanCursor) -> list[Line]:
         )
         cursor.next_n = n + 1
         cursor.next_byte = end
-    return out
+    tail_start = max(view.last_end, cursor.next_byte)
+    partial = PartialTail(text=view.slice(tail_start, view.tip), end_byte=view.tip)
+    return out, partial
 
 
-def load_lines(session_dir: Path) -> list[Line]:
-    """Snapshot every complete line from a session into `Line` records.
-
-    Partial-line bytes at the tail of the active segment are excluded — the
-    pager only displays indexed lines (lines with idx records).
-    """
+def load_lines(session_dir: Path) -> tuple[list[Line], PartialTail]:
+    """Snapshot a session: every complete (indexed) line plus the partial tail."""
     return _scan_from(session_dir, _ScanCursor())
 
 
@@ -223,9 +237,16 @@ class PagerState:
 
     `seen` is the highest line number the user has had visible. `new_count` is
     `lines[-1].n - seen` — the "+K new" counter on the status line.
+
+    `partial` is the unterminated tail, displayed as one extra trailing line.
+    It has no idx record yet, so it is presented under its *predicted* number
+    `lines[-1].n + 1` (line numbers are consecutive, so that is the number it
+    takes once its newline arrives) with the previous line's timestamp. Unlike
+    `lines` it mutates in place, so per-index memos never hold it.
     """
 
     lines: list[Line] = field(default_factory=list)
+    partial: Line | None = None
     view_top: int = 0
     view_height: int = 24
     seen: int = 0
@@ -242,12 +263,15 @@ class PagerState:
     prompt_buffer: str = ""
     help_active: bool = False
     help_view_top: int = 0  # scroll position within the help overlay
-    # visible_matches() memo, keyed by (pattern, view_top, view_height, len(lines))
-    _match_cache: tuple[tuple[str, int, int, int], list[tuple[int, int, int]]] | None = (
-        field(default=None, repr=False, compare=False)
-    )
+    # visible_matches() memo, keyed by
+    # (pattern, view_top, view_height, len(lines), partial end_byte)
+    _match_cache: (
+        tuple[tuple[str, int, int, int, int], list[tuple[int, int, int]]] | None
+    ) = field(default=None, repr=False, compare=False)
     # _decode() memo; the buffer is append-only, so entries never go stale.
-    _decode_cache: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
+    _decode_cache: dict[int, str] = field(
+        default_factory=dict, repr=False, compare=False
+    )
     # Per-line match memo: line index -> (pattern, expanded match spans).
     _line_matches: dict[int, tuple[str, list[tuple[int, int]]]] = field(
         default_factory=dict, repr=False, compare=False
@@ -278,10 +302,50 @@ class PagerState:
         if not new_lines:
             return
         self.lines.extend(new_lines)
+        self._reconcile_partial()
         if self.follow:
             self.goto_end()
         else:
             self._update_seen()
+
+    def set_partial(self, tail: PartialTail | None) -> None:
+        """Install, replace, or clear the partial-tail display line."""
+        old = self.partial
+        if tail is None or not tail.text:
+            self.partial = None
+        else:
+            last = self.lines[-1] if self.lines else None
+            self.partial = Line(
+                text=tail.text,
+                n=last.n + 1 if last else 1,
+                t=last.t if last else 0.0,
+                end_byte=tail.end_byte,
+            )
+        if self.partial == old:
+            return
+        if self.partial is None:
+            self.view_top = min(self.view_top, self._max_view_top())
+        if self.follow:
+            self.goto_end()
+        else:
+            self._update_seen()
+
+    def _reconcile_partial(self) -> None:
+        """Keep the partial consistent after commits: drop it once committed
+        bytes cover it (no duplicate row while the source's cleared-tail
+        message is still in flight), else renumber it past the new last line."""
+        if self.partial is None or not self.lines:
+            return
+        last = self.lines[-1]
+        if self.partial.end_byte <= last.end_byte:
+            self.partial = None
+        elif self.partial.n != last.n + 1:
+            self.partial = Line(
+                text=self.partial.text,
+                n=last.n + 1,
+                t=last.t,
+                end_byte=self.partial.end_byte,
+            )
 
     def scroll_down(self, n: int = 1) -> None:
         # Movement keys must not push view_top into the `~` zone (past the
@@ -324,15 +388,14 @@ class PagerState:
         `n` is the recorder line number (Line.n), 1-indexed. Out-of-range
         values clamp to the first/last line in the buffer.
         """
-        if not self.lines:
+        count = self._line_count()
+        if not count:
             return
-        target = 0
-        for i, line in enumerate(self.lines):
-            if line.n >= n:
+        target = count - 1
+        for i in range(count):
+            if self._line_at(i).n >= n:
                 target = i
                 break
-        else:
-            target = len(self.lines) - 1
         self.view_top = max(0, min(self._max_view_top(), target))
         self._update_seen()
 
@@ -443,7 +506,9 @@ class PagerState:
             direction = "backward" if direction == "forward" else "forward"
         return self._jump_to_match(regex, direction)
 
-    def _compile(self, pattern: str, *, silent: bool = False) -> "re.Pattern[str] | None":
+    def _compile(
+        self, pattern: str, *, silent: bool = False
+    ) -> "re.Pattern[str] | None":
         """Smart-case compile (case-insensitive when pattern is all lowercase).
         On regex error: flashes a hint unless `silent=True` (render path)."""
         flags = re.IGNORECASE if pattern == pattern.lower() else 0
@@ -467,14 +532,14 @@ class PagerState:
         advances past the current hit. Any movement resets `view_top`, so
         searching from the new position is automatic.
         """
-        if not self.lines:
+        if not self._line_count():
             self.set_flash("(pattern not found)")
             return False
 
         skip = self.search_last_match == self.view_top
         if direction == "forward":
             start = self.view_top + (1 if skip else 0)
-            rng = range(start, len(self.lines))
+            rng = range(start, self._line_count())
         else:
             start = self.view_top - (1 if skip else 0)
             rng = range(start, -1, -1)
@@ -498,14 +563,21 @@ class PagerState:
         if not self.search_pattern:
             return []
         # Called every frame; inputs change only on search/scroll/resize/feed.
-        key = (self.search_pattern, self.view_top, self.view_height, len(self.lines))
+        # The partial's end_byte grows with its text, keying its mutations.
+        key = (
+            self.search_pattern,
+            self.view_top,
+            self.view_height,
+            len(self.lines),
+            self.partial.end_byte if self.partial else -1,
+        )
         if self._match_cache is not None and self._match_cache[0] == key:
             return self._match_cache[1]
         regex = self._compile(self.search_pattern, silent=True)
         if regex is None:
             return []
         out: list[tuple[int, int, int]] = []
-        rows = min(self.view_height, len(self.lines) - self.view_top)
+        rows = min(self.view_height, self._line_count() - self.view_top)
         for row in range(rows):
             out.extend(
                 (row, c0, c1)
@@ -520,11 +592,14 @@ class PagerState:
         """Expanded-text match spans of line `i`, memoized per line.
 
         Scrolling shifts the viewport over mostly-unchanged lines; the memo
-        keeps those from re-running the regex and offset expansion.
+        keeps those from re-running the regex and offset expansion. The
+        partial row mutates in place, so it is computed fresh every time.
         """
-        cached = self._line_matches.get(i)
-        if cached is not None and cached[0] == regex.pattern:
-            return cached[1]
+        committed = i < len(self.lines)
+        if committed:
+            cached = self._line_matches.get(i)
+            if cached is not None and cached[0] == regex.pattern:
+                return cached[1]
         raw = self._decode(i)
         spans = [
             (m.start(), m.end())
@@ -535,17 +610,21 @@ class PagerState:
             # Map raw-text match offsets onto the painted (expanded) text.
             offs = _expand_offsets(raw)
             spans = [(offs[s], offs[e]) for s, e in spans]
-        if len(self._line_matches) >= self._MEMO_MAX:
-            _evict_half(self._line_matches)
-        self._line_matches[i] = (regex.pattern, spans)
+        if committed:
+            if len(self._line_matches) >= self._MEMO_MAX:
+                _evict_half(self._line_matches)
+            self._line_matches[i] = (regex.pattern, spans)
         return spans
 
     def _decode(self, i: int) -> str:
         """Search text of line `i`: escapes stripped, tabs/controls raw.
 
         Raw text keeps `\\t`-style patterns matchable; `visible_matches`
-        maps match offsets onto the painted text.
+        maps match offsets onto the painted text. The partial row is never
+        cached — it mutates in place at a fixed index.
         """
+        if i >= len(self.lines):
+            return strip_ansi_str(_display_text(self._line_at(i)))
         cached = self._decode_cache.get(i)
         if cached is None:
             cached = strip_ansi_str(_display_text(self.lines[i]))
@@ -557,7 +636,14 @@ class PagerState:
     # ----- derived state -----
 
     def visible(self) -> list[Line]:
-        return self.lines[self.view_top : self.view_top + self.view_height]
+        out = self.lines[self.view_top : self.view_top + self.view_height]
+        if (
+            self.partial is not None
+            and len(out) < self.view_height
+            and self.view_top <= len(self.lines)
+        ):
+            out.append(self.partial)
+        return out
 
     def view_bottom_line(self) -> Line | None:
         vis = self.visible()
@@ -570,7 +656,8 @@ class PagerState:
 
     def status_text(self, session_id: str) -> str:
         bot = self.view_bottom_line()
-        last = self.lines[-1] if self.lines else None
+        # The partial counts as the (predicted) last line for positions.
+        last = self.partial or (self.lines[-1] if self.lines else None)
         if bot is None or last is None:
             at_line = "0/0"
             at_byte = "0/0"
@@ -580,10 +667,7 @@ class PagerState:
             at_byte = f"{bot.end_byte}/{last.end_byte}"
             at_time = f"{bot.t:.3f}/{last.t:.3f}"
         parts = [
-            f"id={session_id[:8]}"
-            f" at-line={at_line}"
-            f" at-byte={at_byte}"
-            f" at-time={at_time}"
+            f"id={session_id[:8]} at-line={at_line} at-byte={at_byte} at-time={at_time}"
         ]
         new = self.new_count()
         if new > 0:
@@ -601,16 +685,24 @@ class PagerState:
 
     # ----- helpers -----
 
+    def _line_count(self) -> int:
+        """Display rows in the buffer: committed lines plus the partial tail."""
+        return len(self.lines) + (1 if self.partial is not None else 0)
+
+    def _line_at(self, i: int) -> Line:
+        """Display line at buffer index `i`; index `len(lines)` is the partial."""
+        return self.lines[i] if i < len(self.lines) else self.partial
+
     def _max_view_top(self) -> int:
         # Last line at the TOP of the screen (so any line — including the very
         # last — can be scrolled into the top row by search or movement). Rows
         # below the buffer are filled with `~` placeholders at render time.
-        return max(0, len(self.lines) - 1)
+        return max(0, self._line_count() - 1)
 
     def _natural_max_view_top(self) -> int:
         # Last line at the BOTTOM of the screen — the furthest down movement
         # keys are allowed to scroll without leaving `~` rows.
-        return max(0, len(self.lines) - self.view_height)
+        return max(0, self._line_count() - self.view_height)
 
     def _update_seen(self) -> None:
         bot = self.view_bottom_line()
@@ -634,8 +726,8 @@ class SourceEvent:
 
 
 class PagerSource:
-    """Background thread that watches a session and pushes new `Line`s + lifecycle
-    `SourceEvent`s onto a thread-safe queue.
+    """Background thread that watches a session and pushes new `Line`s,
+    `PartialTail` updates, and lifecycle `SourceEvent`s onto a thread-safe queue.
 
     Main loop drains via `get_nowait()` between key reads.
     """
@@ -651,7 +743,8 @@ class PagerSource:
         self.session_dir = session_dir
         self.cfg = cfg
         self.cursor = initial_cursor
-        self.queue: queue.Queue[Line | SourceEvent] = queue.Queue()
+        self.queue: queue.Queue[Line | PartialTail | SourceEvent] = queue.Queue()
+        self._last_partial: tuple[bytes, int] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._hung_emitted = False
@@ -752,17 +845,24 @@ class PagerSource:
             watcher.close()
 
     def _drain_new_lines(self) -> None:
-        """Push newly indexed lines onto the queue, resuming where we left off.
+        """Push newly indexed lines (and partial-tail changes) onto the queue,
+        resuming where we left off.
 
         Cost is O(bytes past the scan cursor) per wakeup — segments wholly
         below `self._scan.next_byte` are not re-read.
         """
         emitted = False
-        for line in _scan_from(self.session_dir, self._scan):
+        lines, partial = _scan_from(self.session_dir, self._scan)
+        for line in lines:
             if line.n > self.cursor:
                 self.queue.put(line)
                 self.cursor = line.n
                 emitted = True
+        # Lines go first so the consumer numbers the partial off fresh commits.
+        key = (partial.text, partial.end_byte)
+        if key != self._last_partial:
+            self.queue.put(partial)
+            self._last_partial = key
         if emitted:
             self._hung_emitted = False  # fresh activity clears prior hung warning
 
@@ -777,10 +877,46 @@ def _exit_badge(info: SessionInfo | None) -> str:
     return "exited"
 
 
+def _utf8_need(b0: int) -> int:
+    """Total UTF-8 sequence length implied by lead byte `b0` (0 = invalid lead)."""
+    if b0 < 0x80:
+        return 1
+    if 0xC2 <= b0 <= 0xDF:
+        return 2
+    if 0xE0 <= b0 <= 0xEF:
+        return 3
+    if 0xF0 <= b0 <= 0xF4:
+        return 4
+    return 0
+
+
+def _feed_prompt_byte(pending: bytes, ch: int) -> tuple[bytes, str]:
+    """Incremental UTF-8 decode of one getch byte for the search prompt.
+
+    Returns `(pending', text)`: `text` is empty while a multibyte sequence is
+    incomplete; malformed input is dropped (a byte that breaks a pending
+    sequence restarts decoding at that byte).
+    """
+    if not 0 <= ch <= 0xFF:
+        return b"", ""
+    buf = pending + bytes([ch])
+    need = _utf8_need(buf[0])
+    if need == 0:
+        return b"", ""
+    if len(buf) < need:
+        return buf, ""
+    try:
+        return b"", buf.decode("utf-8")
+    except UnicodeDecodeError:
+        return _feed_prompt_byte(b"", ch) if pending else (b"", "")
+
+
 # Less-style key sets. Shared between main-mode and help-overlay dispatch.
 # `\n` and `\r` cover Enter on different terminals; the digits/^N/^P/etc are
 # the less defaults from `less --help`.
-_KEYS_LINE_DOWN = frozenset({ord("e"), 5, ord("j"), 14, ord("\n"), ord("\r"), curses.KEY_DOWN})
+_KEYS_LINE_DOWN = frozenset(
+    {ord("e"), 5, ord("j"), 14, ord("\n"), ord("\r"), curses.KEY_DOWN}
+)
 _KEYS_LINE_UP = frozenset({ord("y"), 25, ord("k"), 11, 16, curses.KEY_UP})
 _KEYS_WINDOW_DOWN = frozenset({ord("f"), 6, 22, ord(" "), curses.KEY_NPAGE})
 _KEYS_WINDOW_UP = frozenset({ord("b"), 2, curses.KEY_PPAGE})
@@ -955,6 +1091,21 @@ class _AttrMap:
         return pair
 
 
+def _expanded_spans(text: str, start: Style) -> list[tuple[str, Style]]:
+    """Parse `text` into styled spans with tabs/controls expanded.
+
+    Tab stops depend on the running cell column across chunks, so expansion
+    happens here, span by span.
+    """
+    parsed, _ = parse_spans(text, start)
+    col = 0
+    out: list[tuple[str, Style]] = []
+    for chunk, style in parsed:
+        chunk, col = _expand(chunk, col)
+        out.append((chunk, style))
+    return out
+
+
 class _LineStyleCache:
     """Start-of-line styles and parsed spans for the (append-only) buffer.
 
@@ -979,6 +1130,13 @@ class _LineStyleCache:
                 _, self._end = parse_spans(_display_text(lines[j]), self._end)
         return self._starts[i]
 
+    def tail_style(self, lines: list[Line]) -> Style:
+        """SGR carry-over state after the last line — the start style for the
+        partial tail."""
+        if lines:
+            self.start_style(lines, len(lines) - 1)  # extend through the last
+        return self._end
+
     def spans(
         self, lines: list[Line], i: int, *, styled: bool = True
     ) -> list[tuple[str, Style]]:
@@ -987,13 +1145,7 @@ class _LineStyleCache:
         cached = self._spans.get(i)
         if cached is None:
             start = self.start_style(lines, i) if styled else DEFAULT_STYLE
-            parsed, _ = parse_spans(_display_text(lines[i]), start)
-            # Tab stops depend on the running cell column across chunks.
-            col = 0
-            cached = []
-            for chunk, style in parsed:
-                chunk, col = _expand(chunk, col)
-                cached.append((chunk, style))
+            cached = _expanded_spans(_display_text(lines[i]), start)
             if len(self._spans) >= self._SPANS_MAX:
                 self._spans.clear()
             self._spans[i] = cached
@@ -1005,8 +1157,9 @@ def run_pager(info: SessionInfo, cfg: Config, *, strip: bool) -> int:
     if not sys.stdout.isatty():
         return _cat_fallback(info, strip=strip)
     scan = _ScanCursor()
-    lines = _scan_from(info.path, scan)
+    lines, partial = _scan_from(info.path, scan)
     state = PagerState(lines=lines, state_badge=info.status)
+    state.set_partial(partial)
     initial_cursor = lines[-1].n if lines else 0
     source = PagerSource(
         info.path, cfg, initial_cursor=initial_cursor, scan_resume=scan
@@ -1063,6 +1216,7 @@ def _curses_loop(
         pass
 
     count_buffer = ""
+    prompt_pending = b""  # incomplete UTF-8 sequence from the search prompt
     attrs = _AttrMap()
     styles = _LineStyleCache()
 
@@ -1071,8 +1225,13 @@ def _curses_loop(
         state.resize(max(1, h - 1))
         _drain_source(source, state)
         _render(
-            stdscr, state, info,
-            strip=strip, count_buffer=count_buffer, attrs=attrs, styles=styles,
+            stdscr,
+            state,
+            info,
+            strip=strip,
+            count_buffer=count_buffer,
+            attrs=attrs,
+            styles=styles,
         )
 
         ch = stdscr.getch()
@@ -1086,12 +1245,18 @@ def _curses_loop(
         if state.prompt_active:
             if ch in (10, 13, curses.KEY_ENTER):
                 state.submit_prompt()
+                prompt_pending = b""
             elif ch in (27, 7):  # Esc, ^G
                 state.cancel_prompt()
+                prompt_pending = b""
             elif ch in (127, 8, curses.KEY_BACKSPACE):
                 state.backspace_prompt()
-            elif 32 <= ch <= 126:
-                state.append_prompt(chr(ch))
+                prompt_pending = b""
+            elif 32 <= ch <= 255:
+                # Multibyte UTF-8 arrives as individual getch bytes.
+                prompt_pending, text = _feed_prompt_byte(prompt_pending, ch)
+                if text:
+                    state.append_prompt(text)
             continue
 
         if state.follow:
@@ -1127,13 +1292,18 @@ def _curses_loop(
                 state.help_goto_end()
             else:
                 _dispatch_scroll(
-                    ch, n,
+                    ch,
+                    n,
                     down=state.help_scroll_down,
                     up=state.help_scroll_up,
                     page_down=state.help_page_down,
                     page_up=state.help_page_up,
-                    half_down=lambda: state.help_scroll_down(max(1, state.view_height // 2)),
-                    half_up=lambda: state.help_scroll_up(max(1, state.view_height // 2)),
+                    half_down=lambda: state.help_scroll_down(
+                        max(1, state.view_height // 2)
+                    ),
+                    half_up=lambda: state.help_scroll_up(
+                        max(1, state.view_height // 2)
+                    ),
                 )
             continue
 
@@ -1148,7 +1318,8 @@ def _curses_loop(
             # `NG` jumps to line N; bare `G` goes to end.
             state.goto_line(n) if n else state.goto_end()
         elif _dispatch_scroll(
-            ch, n,
+            ch,
+            n,
             down=state.scroll_down,
             up=state.scroll_up,
             page_down=state.page_down,
@@ -1179,6 +1350,7 @@ def _curses_loop(
 def _drain_source(source: PagerSource, state: PagerState) -> None:
     """Pull everything pending from the source queue into the state."""
     new_lines: list[Line] = []
+    partial: PartialTail | None = None
     while True:
         try:
             item = source.queue.get_nowait()
@@ -1186,6 +1358,8 @@ def _drain_source(source: PagerSource, state: PagerState) -> None:
             break
         if isinstance(item, Line):
             new_lines.append(item)
+        elif isinstance(item, PartialTail):
+            partial = item  # latest snapshot wins
         else:  # SourceEvent
             if item.kind == "hung":
                 state.set_state_badge("hung")
@@ -1196,6 +1370,20 @@ def _drain_source(source: PagerSource, state: PagerState) -> None:
                 state.set_flash("removed")
     if new_lines:
         state.feed_lines(new_lines)
+    # After feed_lines, so the partial is numbered against the new last line.
+    if partial is not None:
+        state.set_partial(partial)
+
+
+def _row_spans(
+    state: PagerState, styles: _LineStyleCache, i: int, color: bool
+) -> list[tuple[str, Style]]:
+    """Painted spans for buffer row `i`. The partial-tail row (index
+    `len(lines)`) mutates in place, so it bypasses the style cache."""
+    if i < len(state.lines):
+        return styles.spans(state.lines, i, styled=color)
+    start = styles.tail_style(state.lines) if color else DEFAULT_STYLE
+    return _expanded_spans(_display_text(state._line_at(i)), start)
 
 
 def _safe_addstr(stdscr, y: int, x: int, s: str, attr: int = 0) -> None:
@@ -1242,9 +1430,7 @@ def _render(
             _safe_addstr(stdscr, i, 0, "~")
             continue
         col = 0  # cells, not chars: wide glyphs occupy two
-        for chunk, style in styles.spans(
-            state.lines, state.view_top + i, styled=color
-        ):
+        for chunk, style in _row_spans(state, styles, state.view_top + i, color):
             if col >= w - 1:
                 break
             clipped, cells = _clip_cells(chunk, w - 1 - col)
@@ -1263,9 +1449,7 @@ def _render(
                 break  # rows ascend
             text = "".join(
                 chunk
-                for chunk, _ in styles.spans(
-                    state.lines, state.view_top + row, styled=color
-                )
+                for chunk, _ in _row_spans(state, styles, state.view_top + row, color)
             )
             # Spans ascend within the row: one pass converts offsets to cells.
             pos = 0
@@ -1286,11 +1470,12 @@ def _render(
     # Bottom row: prompt during search entry, otherwise the status bar.
     if state.prompt_active:
         prefix = "/" if state.prompt_direction == "forward" else "?"
-        text = (prefix + state.prompt_buffer)[: max(0, w - 1)]
+        # Clip and place the cursor by cells, not chars (wide glyphs are 2).
+        text, cells = _clip_cells(prefix + state.prompt_buffer, max(0, w - 1))
         try:
             stdscr.addstr(h - 1, 0, text)
             curses.curs_set(1)
-            stdscr.move(h - 1, min(len(text), w - 1))
+            stdscr.move(h - 1, min(cells, w - 1))
         except curses.error:
             pass
     else:

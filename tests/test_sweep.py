@@ -9,12 +9,14 @@ from pathlib import Path
 
 from live.config import Config
 from live.format import DEAD_NAME, INCONSISTENT_MARKER, LOCK_NAME, Meta, Watermarks
-from live.session import SessionInfo, sweep_all, sweep_one
+from live.session import STARTUP_ORPHAN_SEC, SessionInfo, sweep_all, sweep_one
 from live.state import SWEEP_INTERVAL_SEC, last_sweep_time, mark_swept, state_path
 from live.verbose import emit_exit
 
 
-def _stub_session(sessions_dir: Path, *, sid: str = "00000000-0000-4000-8000-000000000000") -> Path:
+def _stub_session(
+    sessions_dir: Path, *, sid: str = "00000000-0000-4000-8000-000000000000"
+) -> Path:
     d = sessions_dir / sid
     d.mkdir(mode=0o700, parents=True, exist_ok=False)
     return d
@@ -46,7 +48,9 @@ def test_sweep_stamps_consistent_when_stream_and_idx_match(tmp_path: Path) -> No
     assert dead.read_bytes() == b""  # empty file = consistent
 
 
-def test_sweep_stamps_inconsistent_when_stream_is_one_line_ahead(tmp_path: Path) -> None:
+def test_sweep_stamps_inconsistent_when_stream_is_one_line_ahead(
+    tmp_path: Path,
+) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(mode=0o700)
     sess = _stub_session(sessions_dir)
@@ -62,13 +66,29 @@ def test_sweep_stamps_inconsistent_when_stream_is_one_line_ahead(tmp_path: Path)
     assert dead.read_bytes() == INCONSISTENT_MARKER
 
 
-def test_sweep_skips_session_without_lock_file(tmp_path: Path) -> None:
+def test_sweep_skips_fresh_session_without_lock_file(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(mode=0o700)
     sess = _stub_session(sessions_dir)
-    # No process.lock at all -> sweep treats as starting and leaves it alone.
+    # No process.lock, recent mtime -> sweep treats as starting and leaves it alone.
     sweep_one(sess, _cfg())
+    assert sess.exists()
     assert not (sess / DEAD_NAME).exists()
+
+
+def test_sweep_deletes_aged_startup_orphan(tmp_path: Path) -> None:
+    """A lock-less dir past STARTUP_ORPHAN_SEC is a startup-crash orphan:
+    no meta makes it invisible to ls/rm, and no lock means the dead path
+    can never stamp it — sweep must reclaim it directly."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(mode=0o700)
+    sess = _stub_session(sessions_dir)
+    old = time.time() - STARTUP_ORPHAN_SEC - 60
+    os.utime(sess, (old, old))
+
+    sweep_one(sess, _cfg())
+
+    assert not sess.exists()
 
 
 def test_sweep_negative_ttl_never_deletes(tmp_path: Path) -> None:
@@ -117,7 +137,22 @@ def test_sweep_all_skips_when_within_interval(tmp_path: Path, monkeypatch) -> No
     sweep_all(_cfg())
 
     assert not (sess / DEAD_NAME).exists()  # throttle skipped the work
-    assert last_sweep_time() == stamped     # timestamp unchanged
+    assert last_sweep_time() == stamped  # timestamp unchanged
+
+
+def test_sweep_all_runs_when_stamp_is_in_future(tmp_path: Path, monkeypatch) -> None:
+    """A future lastSweepTime (clock stepped backwards) must not disable
+    sweeping until wall time catches up."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    mark_swept(now=time.time() + 7 * 86400)
+    sessions = tmp_path / ".live" / "sessions"
+    sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
+    sess = _stub_session(sessions)
+    (sess / LOCK_NAME).write_text("99999\n")
+
+    sweep_all(_cfg())
+
+    assert (sess / DEAD_NAME).exists()
 
 
 def test_sweep_all_runs_when_interval_elapsed(tmp_path: Path, monkeypatch) -> None:

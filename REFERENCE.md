@@ -137,7 +137,7 @@ options:
   --strip-ansi       Strip ANSI.
   --raw              Keep ANSI.
   -n, --lines LINES  Last N lines (default 10); +N for lines n >= N.
-  -c, --bytes BYTES  Last K bytes; +K for bytes after offset K.
+  -c, --bytes BYTES  Last K bytes; +K for bytes from position K.
   -t, --time TIME    Lines with idx t > T: epoch, duration (30m), or ISO datetime.
 ```
 
@@ -282,6 +282,8 @@ stderr: `live` verbose output (-v):
   "live: exit-code=<code>" or "live: exit=inconsistent"
 - hung: alive, but stalled
   "live: status=hung last-activity=<s>"
+- tty closed: output detached but child is running
+  "live: tty closed; no further output"
 - gap: rotation dropped data
   "live: dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)"
 - partial: partial line (eg. progress bar)
@@ -291,7 +293,7 @@ Check for new data:
   live tail -vn +<N> <SELECTOR>  # by line
   live tail -vc +<B> <SELECTOR>  # by byte
 
-Reset cursor to 0 if <uuid> changes (new session)
+Reset cursor to 1 if <uuid> changes (new session)
 ```
 
 ---

@@ -20,9 +20,7 @@ def test_stop_by_name_keeps_recording(
     project: Path, run_live, spawn_run, wait_for
 ) -> None:
     proc = spawn_run("-n", "srv")
-    assert wait_for(
-        lambda: "running" in _statuses(project, run_live).values()
-    )
+    assert wait_for(lambda: "running" in _statuses(project, run_live).values())
 
     res = run_live(project, "stop", "srv")
     [sid] = res.stdout.split()
@@ -36,9 +34,7 @@ def test_stop_by_name_keeps_recording(
 
 def test_stop_by_uuid_prefix(project: Path, run_live, spawn_run, wait_for) -> None:
     spawn_run("-n", "srv")
-    assert wait_for(
-        lambda: "running" in _statuses(project, run_live).values()
-    )
+    assert wait_for(lambda: "running" in _statuses(project, run_live).values())
     [sid] = _statuses(project, run_live)
     res = run_live(project, "stop", sid[:8])
     assert res.stdout.strip() == sid
@@ -58,8 +54,15 @@ def test_stop_all(project: Path, run_live, wait_for) -> None:
 
 def test_stop_kills_term_ignoring_child(project: Path, run_live, wait_for) -> None:
     res = run_live(
-        project, "run", "-d", "-n", "stubborn", "--",
-        "sh", "-c", 'trap "" TERM; echo $$; sleep 60',
+        project,
+        "run",
+        "-d",
+        "-n",
+        "stubborn",
+        "--",
+        "sh",
+        "-c",
+        'trap "" TERM; echo $$; sleep 60',
     )
     sid = res.stdout.strip()
     assert wait_for(lambda: run_live(project, "cat", "stubborn").stdout.strip())

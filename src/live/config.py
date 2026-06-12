@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .paths import config_path
+
+
+class ConfigError(Exception):
+    """Config file exists but is unusable; message is user-facing (no `live: `)."""
 
 
 DEFAULTS = {
@@ -16,12 +19,17 @@ DEFAULTS = {
 }
 
 
-_VALIDATORS = {
+def _int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+_FIELDS = {
+    # name: (validator, expected-value description)
     # ttlDays: any int; negative disables sweeping (keep sessions forever).
-    "ttlDays": lambda v: isinstance(v, int) and not isinstance(v, bool),
-    "maxKb": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
-    "segmentKb": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
-    "heartbeatSec": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
+    "ttlDays": (_int, "an integer"),
+    "maxKb": (lambda v: _int(v) and v > 0, "a positive integer"),
+    "segmentKb": (lambda v: _int(v) and v > 0, "a positive integer"),
+    "heartbeatSec": (lambda v: _int(v) and v > 0, "a positive integer"),
 }
 
 
@@ -41,31 +49,66 @@ class Config:
         return self.segment_kb * 1024
 
 
+def _json_type(value) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, str):
+        return "a string"
+    if isinstance(value, list):
+        return "an array"
+    return "an object"
+
+
 def _load_file(path: Path) -> dict[str, int]:
-    """Read config; return {} for missing/malformed (warns on malformed)."""
+    """Read config; return {} if missing. Raise ConfigError if unusable."""
     if not path.exists():
         return {}
     try:
-        with path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, ValueError) as e:
-        print(f"live: malformed config at {path}: {e} — falling back to defaults",
-              file=sys.stderr)
-        return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise ConfigError(
+            f"invalid config {path}: unreadable ({e.strerror or e}) — "
+            f"fix permissions, or delete the file to regenerate defaults"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise ConfigError(
+            f"invalid config {path}: malformed JSON: {e.msg} "
+            f"(line {e.lineno} column {e.colno}) — "
+            f"fix the file, or delete it to regenerate defaults"
+        ) from e
     if not isinstance(raw, dict):
-        return {}
+        raise ConfigError(
+            f"invalid config {path}: top level expects a JSON object, "
+            f"got {_json_type(raw)} — "
+            f"fix the file, or delete it to regenerate defaults"
+        )
     out: dict[str, int] = {}
     for key, val in raw.items():
-        validator = _VALIDATORS.get(key)
-        if validator is None:
-            continue
-        if validator(val):
-            out[key] = val
+        field = _FIELDS.get(key)
+        if field is None:
+            continue  # unknown keys ignored for forward compatibility
+        validate, expected = field
+        if not validate(val):
+            raise ConfigError(
+                f"invalid config {path}: {key} expects {expected}, "
+                f"got {json.dumps(val)} — "
+                f"fix the field, or delete the file to regenerate defaults"
+            )
+        out[key] = val
     return out
 
 
 def load_config() -> Config:
-    """Read `~/.live/config.json`, falling back per-field to compiled defaults."""
+    """Read `~/.live/config.json`, auto-creating it with compiled defaults.
+
+    Missing known fields fall back to defaults (partial files are valid).
+    Raises ConfigError if the file is unreadable, malformed, or a known
+    field has an invalid value.
+    """
     cfg_path = config_path()
     if not cfg_path.exists():
         try:

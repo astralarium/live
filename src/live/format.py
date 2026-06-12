@@ -48,7 +48,12 @@ def idx_name(seg: int) -> str:
 
 @dataclass(frozen=True)
 class Meta:
-    """Session metadata. Times are float seconds since epoch."""
+    """Session metadata. Times are float seconds since epoch.
+
+    `tty_closed_at`: the child closed its terminal but kept running — no
+    further output can arrive. `detached`: live survivors remained in the
+    child's process group at exit (best-effort).
+    """
 
     id: str
     command: list[str]
@@ -57,6 +62,8 @@ class Meta:
     exited_at: float | None = None
     exit_code: int | None = None
     name: str | None = None
+    tty_closed_at: float | None = None
+    detached: bool = False
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -69,6 +76,10 @@ class Meta:
         }
         if self.name is not None:
             d["name"] = self.name
+        if self.tty_closed_at is not None:
+            d["ttyClosedAt"] = self.tty_closed_at
+        if self.detached:
+            d["detached"] = True
         return d
 
     @staticmethod
@@ -81,13 +92,19 @@ class Meta:
             exited_at=float(d["exitedAt"]) if d.get("exitedAt") is not None else None,
             exit_code=d.get("exitCode"),
             name=d.get("name"),
+            tty_closed_at=(
+                float(d["ttyClosedAt"]) if d.get("ttyClosedAt") is not None else None
+            ),
+            detached=bool(d.get("detached", False)),
         )
 
 
 def write_meta_atomic(session_dir: Path, meta: Meta) -> None:
     """Write meta.json atomically (same-filesystem tempfile + fsync + rename)."""
     payload = json.dumps(meta.to_dict(), indent=2) + "\n"
-    fd, tmp_path = tempfile.mkstemp(prefix=".meta.", suffix=".tmp", dir=str(session_dir))
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".meta.", suffix=".tmp", dir=str(session_dir)
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(payload)
@@ -227,11 +244,16 @@ def last_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
     records exist yet (header-only or missing file)."""
     try:
         size = os.path.getsize(idx_path)
-        if size < IDX_HEADER_SIZE + IDX_RECORD_SIZE:
+        count = (size - IDX_HEADER_SIZE) // IDX_RECORD_SIZE
+        if count < 1:
             return None
+        # Seek to the record stride, not size - record: a torn append (readers
+        # are lock-free against a live writer) must not yield a straddled record.
         with idx_path.open("rb") as f:
-            f.seek(size - IDX_RECORD_SIZE)
+            f.seek(IDX_HEADER_SIZE + (count - 1) * IDX_RECORD_SIZE)
             buf = f.read(IDX_RECORD_SIZE)
+        if len(buf) < IDX_RECORD_SIZE:
+            return None
         return IDX_RECORD.unpack(buf)
     except FileNotFoundError:
         return None
@@ -297,8 +319,6 @@ def read_idx_records(idx_path: Path) -> list[tuple[int, float, int]]:
     if len(data) < IDX_HEADER_SIZE:
         return []
     out: list[tuple[int, float, int]] = []
-    for i in range(
-        IDX_HEADER_SIZE, len(data) - IDX_RECORD_SIZE + 1, IDX_RECORD_SIZE
-    ):
+    for i in range(IDX_HEADER_SIZE, len(data) - IDX_RECORD_SIZE + 1, IDX_RECORD_SIZE):
         out.append(IDX_RECORD.unpack_from(data, i))
     return out

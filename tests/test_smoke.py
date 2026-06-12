@@ -45,7 +45,7 @@ def test_full_cycle(project: Path, run_live) -> None:
     assert "exit-code=0" in since.stderr
 
     missing = run_live(project, "cat", "nope", check=False)
-    assert missing.returncode == 2
+    assert missing.returncode == 1
     assert "no such session" in missing.stderr
 
     rm = run_live(project, "rm", "smoke")
@@ -56,8 +56,7 @@ def test_full_cycle(project: Path, run_live) -> None:
 
 def test_tail_n_plus_is_inclusive_unix_semantics(project: Path, run_live) -> None:
     """`tail -n +N` emits lines with n >= N (Unix); `+1` returns all lines."""
-    run_live(project, "run", "-n", "u", "--", "sh", "-c",
-             "echo a; echo b; echo c")
+    run_live(project, "run", "-n", "u", "--", "sh", "-c", "echo a; echo b; echo c")
     # +1 is inclusive -> all three lines.
     out = run_live(project, "tail", "-n", "+1", "u").stdout.replace("\r", "")
     assert out.splitlines() == ["a", "b", "c"]

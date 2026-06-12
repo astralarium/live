@@ -1,14 +1,23 @@
 """Pure-function unit tests for reader helpers, format primitives, selector
-resolution, and the polling watcher backend."""
+resolution, name-lock acquisition, and the polling watcher backend."""
 
 from __future__ import annotations
 
+import os
+import signal
 import time
 from pathlib import Path
 
 import pytest
 
-from live.format import IDX_RECORD, Meta, Watermarks, count_complete_lines, idx_record_count
+from live.format import (
+    IDX_RECORD,
+    Meta,
+    Watermarks,
+    count_complete_lines,
+    idx_record_count,
+    last_idx_record,
+)
 from live.reader import (
     StreamView,
     should_strip_ansi,
@@ -20,6 +29,7 @@ from live.session import (
     resolve_many,
     resolve_one,
 )
+from live.lock import HeldLock, LockTimeout
 from live.watcher import _PollWatcher
 
 
@@ -29,10 +39,10 @@ from live.watcher import _PollWatcher
 @pytest.mark.parametrize(
     "explicit_strip,explicit_raw,is_tty,expected",
     [
-        (False, False, False, True),   # default: not tty -> strip
-        (False, False, True, False),   # default: tty -> raw
-        (True, False, True, True),     # --strip-ansi wins
-        (False, True, False, False),   # --raw wins
+        (False, False, False, True),  # default: not tty -> strip
+        (False, False, True, False),  # default: tty -> raw
+        (True, False, True, True),  # --strip-ansi wins
+        (False, True, False, False),  # --raw wins
     ],
 )
 def test_should_strip_ansi_matrix(
@@ -162,6 +172,24 @@ def test_meta_without_name_omits_field() -> None:
     assert "name" not in m.to_dict()
 
 
+def test_meta_tty_closed_and_detached_roundtrip() -> None:
+    m = Meta(
+        id="x",
+        command=["true"],
+        cwd="/",
+        started_at=1.0,
+        tty_closed_at=2.5,
+        detached=True,
+    )
+    assert Meta.from_dict(m.to_dict()) == m
+
+
+def test_meta_omits_tty_fields_by_default() -> None:
+    d = Meta(id="x", command=["true"], cwd="/", started_at=1.0).to_dict()
+    assert "ttyClosedAt" not in d
+    assert "detached" not in d
+
+
 def test_count_complete_lines(tmp_path) -> None:
     p = tmp_path / "stream.0000.log"
     p.write_bytes(b"one\ntwo\nthree\n")
@@ -178,6 +206,22 @@ def test_idx_record_count(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
     p.write_bytes(b"\x00" * (16 + 3 * 24))  # 16-byte header + 3 records
     assert idx_record_count(p) == 3
+
+
+def test_last_idx_record_ignores_torn_append(tmp_path) -> None:
+    # Readers are lock-free against a live writer: a record observed
+    # mid-append must not be read straddled across two records.
+    p = tmp_path / "lines.0000.idx"
+    rec1 = IDX_RECORD.pack(1, 1000.0, 0)
+    rec2 = IDX_RECORD.pack(2, 1001.0, 10)
+    p.write_bytes(b"\x00" * 16 + rec1 + rec2 + rec1[:7])  # torn third record
+    assert last_idx_record(p) == (2, 1001.0, 10)
+
+
+def test_last_idx_record_header_only(tmp_path) -> None:
+    p = tmp_path / "lines.0000.idx"
+    p.write_bytes(b"\x00" * 16)
+    assert last_idx_record(p) is None
 
 
 # ----- selector resolution -----
@@ -242,6 +286,73 @@ def test_resolve_many_ambiguous_uuid_prefix_raises_selector_error() -> None:
     with pytest.raises(SelectorError, match="ambiguous") as ei:
         resolve_many([a, b], "abc")
     assert not isinstance(ei.value, NoSuchSelectorError)
+
+
+# ----- HeldLock (name lock) acquisition -----
+
+
+def test_held_lock_times_out_and_names_holder(tmp_path: Path, capfd) -> None:
+    lock_path = tmp_path / "name.lock"
+    guard = HeldLock(lock_path)
+    with pytest.raises(LockTimeout) as ei:
+        HeldLock(lock_path, timeout=0.4, notice_after=0.1)
+    assert f"held by pid {os.getpid()}" in str(ei.value)
+    # The one-line wait notice precedes the timeout.
+    assert "waiting for name lock" in capfd.readouterr().err
+    guard.release()
+    HeldLock(lock_path, timeout=0.5).release()  # acquirable again
+
+
+def test_held_lock_inherited_copy_keeps_lock_alive(tmp_path: Path) -> None:
+    """The bug class close_inherited() exists for: a forked child that keeps
+    its fd copy holds the lock even after the parent's fd is gone."""
+    lock_path = tmp_path / "name.lock"
+    guard = HeldLock(lock_path)
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # child: keep the inherited fd open
+        try:
+            os.write(w, b"x")
+            time.sleep(10)
+        finally:
+            os._exit(0)
+    os.close(w)
+    assert os.read(r, 1) == b"x"
+    os.close(r)
+    os.close(guard._fd)  # simulate the parent dying without release()
+    guard._fd = -1
+    try:
+        with pytest.raises(LockTimeout):
+            HeldLock(lock_path, timeout=0.3, notice_after=10)
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+
+
+def test_held_lock_close_inherited_drops_orphan_hold(tmp_path: Path) -> None:
+    """A child that calls close_inherited() leaves the parent's fd as the
+    lock's only reference, so parent death auto-releases it."""
+    lock_path = tmp_path / "name.lock"
+    guard = HeldLock(lock_path)
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            guard.close_inherited()
+            os.write(w, b"x")
+            time.sleep(10)
+        finally:
+            os._exit(0)
+    os.close(w)
+    assert os.read(r, 1) == b"x"  # child's copy is closed
+    os.close(r)
+    os.close(guard._fd)  # simulate the parent dying without release()
+    guard._fd = -1
+    try:
+        HeldLock(lock_path, timeout=0.5, notice_after=10).release()
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
 
 
 # ----- _PollWatcher fallback backend -----

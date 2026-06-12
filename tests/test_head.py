@@ -37,12 +37,13 @@ def test_head_c_limits_to_first_k_bytes(project: Path, run_live) -> None:
 def test_head_verbose_trailer_carries_cursor(project: Path, run_live) -> None:
     sel = _setup_session(project, run_live)
     out = run_live(project, "head", "-vn", "4", sel)
-    # 4 lines emitted -> next-line = 5; 4 * len("lineN\r\n") = 28 bytes on disk.
+    # 4 lines emitted -> next-line = 5; 4 * len("lineN\r\n") = 28 bytes on
+    # disk, so the next unread 1-based position is 29.
     assert "next-line=5" in out.stderr
     assert "last-time=" in out.stderr
     m = re.search(r"next-byte=(\d+)", out.stderr)
     assert m, out.stderr
-    assert int(m.group(1)) == 28
+    assert int(m.group(1)) == 29
 
 
 def test_head_n_minus_drops_last_k(project: Path, run_live) -> None:
@@ -77,7 +78,13 @@ def test_head_n_plus_treated_as_count(project: Path, run_live) -> None:
 def test_head_t_complements_tail_t(project: Path, run_live) -> None:
     """head -t T and tail -t T should partition the session at cursor T."""
     run_live(
-        project, "run", "-n", "split", "--", "sh", "-c",
+        project,
+        "run",
+        "-n",
+        "split",
+        "--",
+        "sh",
+        "-c",
         "echo early-1; echo early-2; sleep 0.6; echo late-1; echo late-2",
     )
     # Probe the trailer time to learn the timestamp range.

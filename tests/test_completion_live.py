@@ -55,22 +55,51 @@ printf '%s\\n' "${{COMPREPLY[@]}}"
 """
     out = subprocess.run(
         ["bash", "-c", script],
-        capture_output=True, text=True, check=True,
-        env=env, cwd=str(cwd) if cwd is not None else None,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+        cwd=str(cwd) if cwd is not None else None,
     ).stdout
     return {ln for ln in out.splitlines() if ln}
 
 
-def _drive_fish(payload: Path, line: str, *, env: dict | None = None,
-                cwd: Path | None = None) -> set[str]:
+def _drive_fish(
+    payload: Path, line: str, *, env: dict | None = None, cwd: Path | None = None
+) -> set[str]:
     """Drive fish's `complete -C` against the sourced payload; return the
     candidate tokens (descriptions stripped)."""
     out = subprocess.run(
         ["fish", "-c", f"source {payload}; complete -C '{line}'"],
-        capture_output=True, text=True, check=True,
-        env=env, cwd=str(cwd) if cwd is not None else None,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+        cwd=str(cwd) if cwd is not None else None,
     ).stdout
     return {ln.split("\t", 1)[0] for ln in out.splitlines() if ln}
+
+
+def _zsh_selectors(payload: Path, env: dict, cwd: Path, *words: str) -> set[str]:
+    """Run the payload's `_live_selectors` against `words` (verb first),
+    with the compsys builtins it calls stubbed out."""
+    words_z = " ".join(f"'{w}'" for w in words)
+    inner = (
+        f"fns=$(awk '/^_live_selectors\\(\\) \\{{/,/^\\}}/' {payload}); "
+        f'eval "$fns"; '
+        "_values() { shift; printf '%s\\n' \"$@\"; }; "
+        f"words=({words_z} ''); "
+        "_live_selectors; :"  # empty result is not an error
+    )
+    out = subprocess.run(
+        ["zsh", "-c", inner],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+        cwd=str(cwd),
+    ).stdout
+    return {ln for ln in out.splitlines() if ln}
 
 
 # ----- fish -----
@@ -80,7 +109,9 @@ def _drive_fish(payload: Path, line: str, *, env: dict | None = None,
 def test_fish_completes_verbs(run_live, tmp_path: Path) -> None:
     payload = _payload(run_live, tmp_path, "fish")
     candidates = _drive_fish(payload, "live ")
-    assert CORE_VERBS <= candidates, f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+    assert CORE_VERBS <= candidates, (
+        f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+    )
 
 
 @pytest.mark.skipif(not _have("fish"), reason="fish not installed")
@@ -119,14 +150,91 @@ def test_fish_run_handoff_skips_flag_values(run_live, tmp_path: Path) -> None:
     (target_dir / "uniqueapple.txt").touch()
 
     payload = _payload(run_live, tmp_path, "fish")
-    candidates = _drive_fish(
-        payload, f"live run -C {tmp_path} cat {target_dir}/unique"
-    )
+    candidates = _drive_fish(payload, f"live run -C {tmp_path} cat {target_dir}/unique")
     assert any("uniqueapple.txt" in c for c in candidates), candidates
 
     inside_cmd = _drive_fish(payload, "live run cat -")
     assert "--detach" not in inside_cmd, inside_cmd
     assert "--geometry" not in inside_cmd, inside_cmd
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_run_clustered_flags_hand_off(run_live, tmp_path: Path) -> None:
+    """`live run -dn NAME cmd <TAB>` must complete against `cmd`, not NAME
+    (README's flagship form)."""
+    target_dir = tmp_path / "ftarget"
+    target_dir.mkdir()
+    (target_dir / "uniqueapple.txt").touch()
+
+    payload = _payload(run_live, tmp_path, "fish")
+    candidates = _drive_fish(payload, f"live run -dn server cat {target_dir}/unique")
+    assert any("uniqueapple.txt" in c for c in candidates), candidates
+
+    # Before the wrapped command, run's own flags are still offered...
+    flags = _drive_fish(payload, "live run -dn server -")
+    assert "--detach" in flags, flags
+    # ...but not inside the wrapped command.
+    inside = _drive_fish(payload, "live run -dn server cat -")
+    assert "--detach" not in inside, inside
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_clustered_scope_flags_forwarded(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live ls -ag <TAB>` forwards both -a and -g; attached `-CDIR` scopes."""
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    other = tmp_path / "otherdir"
+    proj.mkdir()
+    other.mkdir()
+    run_live(proj, "run", "-n", "clustered", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "fish")
+
+    # Exited and out of scope: visible only with both -a and -g.
+    assert "clustered" not in _drive_fish(payload, "live ls ", env=test_env, cwd=other)
+    assert "clustered" in _drive_fish(payload, "live ls -ag ", env=test_env, cwd=other)
+    session_cwd = str(proj.resolve())
+    assert "clustered" in _drive_fish(
+        payload, f"live cat -C{session_cwd} ", env=test_env, cwd=other
+    )
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_count_flag_value_suppresses_selectors(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live tail -n <TAB>` expects a line count, not a selector."""
+    test_env = live_shim
+    run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "fish")
+
+    assert "target" not in _drive_fish(
+        payload, "live tail -n ", env=test_env, cwd=tmp_path
+    )
+    # Value consumed: selectors again.
+    assert "target" in _drive_fish(
+        payload, "live tail -n 5 ", env=test_env, cwd=tmp_path
+    )
+
+
+@pytest.mark.skipif(not _have("fish"), reason="fish not installed")
+def test_fish_older_than_value_suppresses_selectors(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live rm --older-than <TAB>` expects an AGE, not a selector
+    (fish's `-r` declaration owns the value slot)."""
+    test_env = live_shim
+    run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "fish")
+
+    assert "target" not in _drive_fish(
+        payload, "live rm --older-than ", env=test_env, cwd=tmp_path
+    )
+    # Value consumed: selectors again.
+    assert "target" in _drive_fish(
+        payload, "live rm --older-than 7d ", env=test_env, cwd=tmp_path
+    )
 
 
 @pytest.mark.skipif(not _have("fish"), reason="fish not installed")
@@ -150,7 +258,9 @@ def test_fish_cwd_flag_completes_session_cwds(
 def test_bash_completes_verbs(run_live, tmp_path: Path) -> None:
     payload = _payload(run_live, tmp_path, "bash")
     candidates = _drive_bash(payload, ("live", ""), cword=1)
-    assert CORE_VERBS <= candidates, f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+    assert CORE_VERBS <= candidates, (
+        f"missing: {CORE_VERBS - candidates}; got: {candidates}"
+    )
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
@@ -162,9 +272,7 @@ def test_bash_completes_tail_flags(run_live, tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
-def test_bash_run_hands_off_via_command_offset(
-    run_live, tmp_path: Path
-) -> None:
+def test_bash_run_hands_off_via_command_offset(run_live, tmp_path: Path) -> None:
     """Verify our bash script calls `_command_offset 2` after the verb + a non-flag arg.
 
     `_command_offset` is provided by bash-completion; we stub it here so the test
@@ -182,9 +290,7 @@ def test_bash_run_hands_off_via_command_offset(
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
-def test_bash_run_offers_own_flags_before_command(
-    run_live, tmp_path: Path
-) -> None:
+def test_bash_run_offers_own_flags_before_command(run_live, tmp_path: Path) -> None:
     """Before any wrapped command is typed, `live run -<TAB>` offers our own flags
     (`-n`/`--name`/`--`) — NOT a handoff to anything else."""
     payload = _payload(run_live, tmp_path, "bash")
@@ -194,9 +300,101 @@ def test_bash_run_offers_own_flags_before_command(
         cword=2,
         prelude='_command_offset() { echo "OFFSET_CALLED=$1"; }',  # should NOT fire
     )
-    assert not any("OFFSET_CALLED" in ln for ln in out), f"handoff fired prematurely: {out!r}"
+    assert not any("OFFSET_CALLED" in ln for ln in out), (
+        f"handoff fired prematurely: {out!r}"
+    )
     assert "-n" in out, out
     assert "--name" in out, out
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_run_clustered_flags_hand_off(run_live, tmp_path: Path) -> None:
+    """`live run -dn NAME cmd <TAB>` hands off at `cmd`, not NAME."""
+    payload = _payload(run_live, tmp_path, "bash")
+    prelude = '_command_offset() { echo "OFFSET_CALLED=$1"; }'
+
+    # live=0 run=1 -dn=2 server=3 npm=4 — handoff must target index 4.
+    out = _drive_bash(
+        payload,
+        ("live", "run", "-dn", "server", "npm", ""),
+        cword=5,
+        prelude=prelude,
+    )
+    assert "OFFSET_CALLED=4" in out, f"handoff mis-targeted; got: {out!r}"
+
+    # Before the wrapped command, run's own flags are still offered.
+    out = _drive_bash(
+        payload,
+        ("live", "run", "-dn", "server", ""),
+        cword=4,
+        prelude=prelude,
+    )
+    assert not any("OFFSET_CALLED" in ln for ln in out), out
+    assert "--name" in out, out
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_clustered_scope_flags_forwarded(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live ls -ag <TAB>` forwards both -a and -g; attached `-CDIR` scopes."""
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    other = tmp_path / "otherdir"
+    proj.mkdir()
+    other.mkdir()
+    run_live(proj, "run", "-n", "clustered", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
+
+    def drive(words: tuple[str, ...], cword: int) -> set[str]:
+        return _drive_bash(payload, words, cword, env=test_env, cwd=other)
+
+    # Exited and out of scope: visible only with both -a and -g.
+    assert "clustered" not in drive(("live", "ls", ""), cword=2)
+    assert "clustered" in drive(("live", "ls", "-ag", ""), cword=3)
+    session_cwd = str(proj.resolve())
+    assert "clustered" in drive(("live", "cat", f"-C{session_cwd}", ""), cword=3)
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_count_flag_value_suppresses_selectors(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live tail -n <TAB>` (and friends) expect a count, not a selector."""
+    test_env = live_shim
+    run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
+
+    def drive(words: tuple[str, ...], cword: int) -> set[str]:
+        return _drive_bash(payload, words, cword, env=test_env, cwd=tmp_path)
+
+    assert "target" not in drive(("live", "tail", "-n", ""), cword=3)
+    assert "target" not in drive(("live", "head", "-t", ""), cword=3)
+    # Cluster ending in a count flag.
+    assert "target" not in drive(("live", "tail", "-fn", ""), cword=3)
+    # `--lines=` arrives split on `=`.
+    assert "target" not in drive(("live", "tail", "--lines", "=", ""), cword=4)
+    # Value consumed: selectors again.
+    assert "target" in drive(("live", "tail", "-n", "5", ""), cword=4)
+
+
+@pytest.mark.skipif(not _have("bash"), reason="bash not installed")
+def test_bash_older_than_value_suppresses_selectors(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`live rm --older-than <TAB>` expects an AGE, not a selector."""
+    test_env = live_shim
+    run_live(tmp_path, "run", "-n", "target", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "bash")
+
+    def drive(words: tuple[str, ...], cword: int) -> set[str]:
+        return _drive_bash(payload, words, cword, env=test_env, cwd=tmp_path)
+
+    assert "target" not in drive(("live", "rm", "--older-than", ""), cword=3)
+    # `--older-than=` arrives split on `=`.
+    assert "target" not in drive(("live", "rm", "--older-than", "=", ""), cword=4)
+    # Value consumed: selectors again.
+    assert "target" in drive(("live", "rm", "--older-than", "7d", ""), cword=4)
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
@@ -211,8 +409,18 @@ def test_bash_ls_completes_only_active_sessions(
     run_live(tmp_path, "run", "-n", "deadname", "--", "sh", "-c", "echo d")
     # Long-running session.
     proc = subprocess.Popen(
-        [sys.executable, "-m", "live.cli", "run", "-n", "liverun", "--",
-         "sh", "-c", "echo l; sleep 60"],
+        [
+            sys.executable,
+            "-m",
+            "live.cli",
+            "run",
+            "-n",
+            "liverun",
+            "--",
+            "sh",
+            "-c",
+            "echo l; sleep 60",
+        ],
         cwd=str(tmp_path),
         env=live_env,
         stdout=subprocess.DEVNULL,
@@ -312,9 +520,7 @@ def test_bash_cwd_flag_completes_session_cwds(
 
     # `live cat --cwd=<dir> <TAB>` — readline splits on `=` into
     # ("--cwd" "=" <dir>); the scope must still be honored.
-    assert "scoped" in drive(
-        ("live", "cat", "--cwd", "=", session_cwd, ""), cword=5
-    )
+    assert "scoped" in drive(("live", "cat", "--cwd", "=", session_cwd, ""), cword=5)
 
 
 @pytest.mark.skipif(not _have("bash"), reason="bash not installed")
@@ -403,7 +609,8 @@ def test_zsh_script_parses_cleanly(run_live, tmp_path: Path) -> None:
     # `zsh -n` parses without executing — surfaces syntax errors immediately.
     result = subprocess.run(
         ["zsh", "-n", str(payload)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, (
         f"zsh parse failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
@@ -425,7 +632,10 @@ def test_zsh_registers_completion(run_live, tmp_path: Path) -> None:
         "print -- ${_comps[live]:-MISSING}"
     )
     out = subprocess.run(
-        ["zsh", "-c", inner], capture_output=True, text=True, check=True,
+        ["zsh", "-c", inner],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     assert out and out != "MISSING", f"zsh did not register completion: {out!r}"
 
@@ -444,23 +654,33 @@ def test_zsh_selectors_honor_all_cwd_forms(run_live, live_shim, tmp_path: Path) 
     session_cwd = str(proj.resolve())
 
     def selectors(*words: str) -> set[str]:
-        # Extract _live_selectors and stub the compsys builtins it calls.
-        words_z = " ".join(f"'{w}'" for w in words)
-        inner = (
-            f"fns=$(awk '/^_live_selectors\\(\\) \\{{/,/^\\}}/' {payload}); "
-            f"eval \"$fns\"; "
-            "_values() { shift; printf '%s\\n' \"$@\"; }; "
-            f"words=({words_z} ''); "
-            "_live_selectors; :"  # empty result is not an error
-        )
-        out = subprocess.run(
-            ["zsh", "-c", inner],
-            capture_output=True, text=True, check=True,
-            env=test_env, cwd=str(other),
-        ).stdout
-        return {ln for ln in out.splitlines() if ln}
+        return _zsh_selectors(payload, test_env, other, *words)
 
     assert "zscoped" not in selectors("cat")
     assert "zscoped" in selectors("cat", "-C", session_cwd)
     assert "zscoped" in selectors("cat", f"-C{session_cwd}")
     assert "zscoped" in selectors("cat", f"--cwd={session_cwd}")
+
+
+@pytest.mark.skipif(not _have("zsh"), reason="zsh not installed")
+def test_zsh_selectors_handle_clustered_flags(
+    run_live, live_shim, tmp_path: Path
+) -> None:
+    """`-ag` sets both scope flags; `-aC <dir>` and attached `-aC<dir>` scope."""
+    test_env = live_shim
+    proj = tmp_path / "projdir"
+    other = tmp_path / "otherdir"
+    proj.mkdir()
+    other.mkdir()
+    run_live(proj, "run", "-n", "zclust", "--", "sh", "-c", "echo a")
+    payload = _payload(run_live, tmp_path, "zsh")
+    session_cwd = str(proj.resolve())
+
+    def selectors(*words: str) -> set[str]:
+        return _zsh_selectors(payload, test_env, other, *words)
+
+    # Exited and out of scope: visible only with both -a and -g.
+    assert "zclust" not in selectors("ls")
+    assert "zclust" in selectors("ls", "-ag")
+    assert "zclust" in selectors("ls", "-aC", session_cwd)
+    assert "zclust" in selectors("ls", f"-aC{session_cwd}")

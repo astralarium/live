@@ -20,9 +20,11 @@ import select
 import signal
 import struct
 import termios
+import threading
 import time
 import tty
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from .config import Config
@@ -100,12 +102,14 @@ class _Recorder:
         self.lifetime_bytes: int = 0  # cumulative bytes ever written (all segments)
         self.line_counter: int = 0  # absolute line number; n of NEXT completed line
         self.pending_line_start: float | None = None  # seconds; t for current partial
-        self.pending_line_start_byte: int | None = None  # lifetime byte of partial's first byte
+        self.pending_line_start_byte: int | None = (
+            None  # lifetime byte of partial's first byte
+        )
         self.pending_line_bytes: int = 0  # bytes written to stream past last `\n`
 
         self.last_idx_touch: float = 0.0  # seconds
-        self.exited_by_signal: int | None = None
         self.term_at: float | None = None  # first SIGTERM/SIGHUP arrival
+        self.child_reaped: bool = False
         self.inconsistent: bool = False
 
         self._saved_tty: list | None = None
@@ -263,27 +267,31 @@ class _Recorder:
             except OSError:
                 pass
 
-        def _on_termish(sig, _frm):
-            self.exited_by_signal = sig
-            if self.term_at is None:
-                self.term_at = time.time()
-            # Forward to child; it will exit, our select loop will see EIO.
-            # If it ignores the signal, the loop escalates to SIGKILL after
-            # TERM_KILL_GRACE_SEC.
-            try:
-                os.kill(self.child_pid, sig)
-            except (ProcessLookupError, PermissionError):
-                pass
-
         # Explicit --geometry pins the size; don't track terminal resizes.
         if self.geometry is None:
             signal.signal(signal.SIGWINCH, _on_winch)
-        signal.signal(signal.SIGTERM, _on_termish)
-        signal.signal(signal.SIGHUP, _on_termish)
+        signal.signal(signal.SIGTERM, self._on_termish)
+        signal.signal(signal.SIGHUP, self._on_termish)
         # SIGINT: only install a handler when stdin is NOT a TTY.
-        # With a TTY, line discipline routes ^C to the child's pgroup directly.
+        # With a raw-mode TTY, ^C arrives as a 0x03 byte on stdin and is
+        # forwarded to the child PTY, whose line discipline raises SIGINT.
         if not os.isatty(0):
-            signal.signal(signal.SIGINT, _on_termish)
+            signal.signal(signal.SIGINT, self._on_termish)
+
+    def _on_termish(self, sig, _frm) -> None:
+        if self.term_at is None:
+            self.term_at = time.time()
+            # Escalate from a timer thread: the select loop can be blocked
+            # in the mirror write or in waitpid, and `live stop`'s SIGKILL
+            # of the recorder would otherwise orphan a TERM-ignoring child.
+            timer = threading.Timer(TERM_KILL_GRACE_SEC, self._escalate_kill)
+            timer.daemon = True
+            timer.start()
+        # Forward to child; it will exit, our select loop will see EIO.
+        try:
+            os.kill(self.child_pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     # ----- main loop -----
 
@@ -293,12 +301,8 @@ class _Recorder:
         if not self.detach:
             watch.append(0)
         while True:
-            timeout = heartbeat
-            if self.term_at is not None:
-                deadline = self.term_at + TERM_KILL_GRACE_SEC
-                timeout = min(timeout, max(deadline - time.time(), 0))
             try:
-                rlist, _, _ = select.select(watch, [], [], timeout)
+                rlist, _, _ = select.select(watch, [], [], heartbeat)
             except InterruptedError:
                 continue
             except OSError as e:
@@ -307,12 +311,6 @@ class _Recorder:
                 raise
 
             now = time.time()
-
-            # A forwarded SIGTERM/SIGHUP the child ignored must not leave it
-            # running past `live stop`'s deadline: SIGKILL its process group.
-            if self.term_at is not None and now - self.term_at >= TERM_KILL_GRACE_SEC:
-                self.term_at = None
-                self._kill_child_group()
 
             # Drain wakeup pipe (signals already ran their handlers).
             if self._wakeup_r in rlist:
@@ -369,12 +367,29 @@ class _Recorder:
                 except OSError:
                     pass
 
-        # Reap child.
+        # Reap child. PTY EOF usually means it exited, but a child can close
+        # its terminal and keep running — keep heartbeating until it's gone.
         status = 0
         try:
-            _, status = os.waitpid(self.child_pid, 0)
+            pid, status = os.waitpid(self.child_pid, os.WNOHANG)
+            if pid == 0:
+                status = self._wait_tty_closed()
         except ChildProcessError:
             pass
+        self.child_reaped = True
+
+        # Survivors in the child's process group (e.g. `cmd &` from a wrapper
+        # shell) outlive the session. Best-effort: skipped after a stop/kill
+        # escalation, whose SIGKILL may still be tearing the group down.
+        detached = False
+        if self.term_at is None:
+            try:
+                os.killpg(self.child_pid, 0)
+                detached = True
+            except ProcessLookupError:
+                pass
+            except OSError:
+                detached = True  # EPERM: live members under another uid
 
         if self.inconsistent:
             self._stamp_dead(inconsistent=True)
@@ -388,14 +403,8 @@ class _Recorder:
             exit_code = 1
 
         # Graceful exit: update meta, then deadAt, then unlock.
-        final_meta = Meta(
-            id=self.meta.id,
-            command=self.meta.command,
-            cwd=self.meta.cwd,
-            started_at=self.meta.started_at,
-            exited_at=time.time(),
-            exit_code=exit_code,
-            name=self.meta.name,
+        final_meta = replace(
+            self.meta, exited_at=time.time(), exit_code=exit_code, detached=detached
         )
         try:
             write_meta_atomic(self.dir, final_meta)
@@ -403,6 +412,53 @@ class _Recorder:
             pass
         self._stamp_dead(inconsistent=False)
         return exit_code
+
+    def _wait_tty_closed(self) -> int:
+        """The child closed its terminal but is still running: no output can
+        ever arrive again. Mark the session (`ttyClosedAt`), give the user
+        their terminal back, and reap with WNOHANG while keeping heartbeats
+        alive so the session reads `running`, not `hung`. Returns the wait
+        status."""
+        # Absorb the close-fds-then-exit-immediately pattern: don't stamp a
+        # session that is gone within the first beat.
+        deadline = time.time() + 0.05
+        while time.time() < deadline:
+            pid, status = os.waitpid(self.child_pid, os.WNOHANG)
+            if pid:
+                return status
+            time.sleep(0.005)
+        self.meta = replace(self.meta, tty_closed_at=time.time())
+        try:
+            write_meta_atomic(self.dir, self.meta)
+        except OSError:
+            pass
+        self._restore_stdin()
+        if not self.detach:
+            try:
+                os.write(2, b"live: child closed its terminal; waiting for exit\n")
+            except OSError:
+                pass
+        if os.isatty(0):
+            # Cooked mode again, so ^C raises SIGINT here instead of sitting
+            # unread on stdin; route it through the forward-and-escalate
+            # handler rather than dying and orphaning the child.
+            signal.signal(signal.SIGINT, self._on_termish)
+        heartbeat = self.cfg.heartbeat_sec
+        while True:
+            time.sleep(min(1.0, heartbeat))
+            try:
+                pid, status = os.waitpid(self.child_pid, os.WNOHANG)
+            except ChildProcessError:
+                return 0
+            if pid:
+                return status
+            now = time.time()
+            if now - self.last_idx_touch >= heartbeat:
+                try:
+                    os.utime(self.dir / idx_name(self.active_seg), None)
+                    self.last_idx_touch = now
+                except OSError:
+                    pass
 
     # ----- record / index -----
 
@@ -498,6 +554,13 @@ class _Recorder:
 
     # ----- shutdown -----
 
+    def _escalate_kill(self) -> None:
+        """Timer-thread escalation: a child still unreaped TERM_KILL_GRACE_SEC
+        after the first SIGTERM/SIGHUP gets its process group SIGKILLed.
+        The reaped check keeps a late timer off a recycled pgid."""
+        if not self.child_reaped:
+            self._kill_child_group()
+
     def _kill_child_group(self) -> None:
         """SIGKILL the child's process group (pty.fork made it a session
         leader, so pgid == pid and same-group descendants die with it).
@@ -569,6 +632,7 @@ def record_detached(
     geometry: tuple[int, int] | None = None,
     *,
     cwd: Path,
+    after_fork=None,
 ) -> tuple[str | None, str | None]:
     """Fork a recorder that survives the calling shell; don't wait for it.
 
@@ -576,6 +640,10 @@ def record_detached(
     pipe once the session dir + lock exist, so the session is visible to
     `live ls` by the time this returns. Returns `(session_id, error)`:
     exactly one is non-None.
+
+    `after_fork` (if given) runs first thing in the forked child — e.g. to
+    close an inherited name-lock fd so this long-lived process can't keep
+    the lock alive if the caller dies without releasing it.
     """
     read_fd, write_fd = os.pipe()
     read_fd = _fd_above_std(read_fd)
@@ -585,6 +653,8 @@ def record_detached(
         # Child: never return into the caller's stack.
         status = 1
         try:
+            if after_fork is not None:
+                after_fork()
             os.close(read_fd)
             devnull = os.open(os.devnull, os.O_RDWR)
             os.dup2(devnull, 0)
@@ -593,9 +663,7 @@ def record_detached(
             if devnull > 2:
                 os.close(devnull)
             os.setsid()
-            rec = _Recorder(
-                cfg, command, name, detach=True, geometry=geometry, cwd=cwd
-            )
+            rec = _Recorder(cfg, command, name, detach=True, geometry=geometry, cwd=cwd)
             try:
                 rec.setup_session()
             except Exception as e:

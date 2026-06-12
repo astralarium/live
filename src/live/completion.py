@@ -59,7 +59,8 @@ _live_complete() {
             for ((i=verb_idx+1; i<cword; i++)); do
                 case "${words[i]}" in
                     --) seen_cmd=$((i+1)); break ;;
-                    -n|--name|-C|--cwd|--geometry)
+                    # Value-taking flags, exact or cluster-final (`-dn NAME`).
+                    -n|--name|-C|--cwd|--geometry|-[!-nC]*[nC])
                         i=$((i+1))
                         # `--opt=value` arrives split: ("--opt" "=" "value").
                         [ "${words[i]}" = "=" ] && i=$((i+1))
@@ -101,14 +102,14 @@ _live_complete() {
         head)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-v --verbose -g --global -C --cwd --strip-ansi --raw -n --lines -c --bytes -t --time" -- "$cur") )
-            else
+            elif ! _live_prev_is_count; then
                 _live_complete_selectors -a
             fi
             ;;
         tail)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-v --verbose -f --follow -g --global -C --cwd --strip-ansi --raw -n --lines -c --bytes -t --time" -- "$cur") )
-            else
+            elif ! _live_prev_is_count; then
                 _live_complete_selectors -a
             fi
             ;;
@@ -122,7 +123,7 @@ _live_complete() {
         rm)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W "-f --force -g --global -C --cwd --all --exited --untitled --older-than" -- "$cur") )
-            else
+            elif ! _live_prev_is_count; then
                 _live_complete_selectors -a
             fi
             ;;
@@ -145,10 +146,27 @@ _live_prev_is_cwd() {
     return 1
 }
 
+# True when the cursor sits on a count/duration value (`-n/-c/-t`, long
+# forms including `--older-than`, or cluster-final like `-fn`); selectors
+# must not be offered there.
+_live_prev_is_count() {
+    case "$prev" in
+        -[nct]|--lines|--bytes|--time|--older-than|-[!-nctC]*[nct]) return 0 ;;
+        =) case "${words[cword-2]}" in -[nct]|--lines|--bytes|--time|--older-than) return 0 ;; esac ;;
+    esac
+    return 1
+}
+
+# Prints `-a` when --all, `-a`, or a short cluster containing `a` (`-ag`)
+# was typed; `a` inside an attached `-C` value doesn't count.
 _live_all_flag() {
     local i
     for ((i=1; i<cword; i++)); do
-        case "${words[i]}" in -a|--all) echo -a; return ;; esac
+        case "${words[i]}" in
+            --all) echo -a; return ;;
+            --*) ;;
+            -*) case "${words[i]%%C*}" in *a*) echo -a; return ;; esac ;;
+        esac
     done
 }
 
@@ -162,18 +180,34 @@ _live_reply_lines() {
 }
 
 # Selector completion; arguments (`-a`) plus any typed scope flag
-# (`-g`, or `-C <dir>`) are forwarded to `live completion selectors`.
+# (`-g`, or `-C <dir>`, clustered or attached) are forwarded to
+# `live completion selectors`.
 _live_complete_selectors() {
     local -a sel_args=("$@")
-    local i j
+    local i j w cluster
     for ((i=1; i<cword; i++)); do
-        case "${words[i]}" in
-            -g|--global) sel_args+=(-g); break ;;
+        w="${words[i]}"
+        case "$w" in
+            --global) sel_args+=(-g) ;;
             -C|--cwd)
                 j=$((i+1))
                 [ "${words[j]}" = "=" ] && j=$((j+1))
                 (( j < cword )) && sel_args+=(-C "${words[j]}")
-                break ;;
+                ;;
+            --*) ;;
+            -?*)
+                cluster="${w%%C*}"  # short flags before any -C value
+                case "$cluster" in *g*) sel_args+=(-g) ;; esac
+                if [ "$w" != "$cluster" ]; then
+                    if [ -n "${w##*C}" ]; then
+                        sel_args+=(-C "${w#*C}")  # attached: -CPATH
+                    else
+                        j=$((i+1))  # cluster-final: -aC PATH
+                        [ "${words[j]}" = "=" ] && j=$((j+1))
+                        (( j < cword )) && sel_args+=(-C "${words[j]}")
+                    fi
+                fi
+                ;;
         esac
     done
     COMPREPLY=()
@@ -215,7 +249,8 @@ _live() {
                 run)
                     # Complete our flag before the wrapped command; any non-flag
                     # word triggers `_normal` against the wrapped command.
-                    _arguments -S \
+                    # `-s` lets clustered flags (`-dn NAME`) parse correctly.
+                    _arguments -s -S \
                         {-n+,--name=}'[session name]:name:' \
                         '(-d --detach)'{-d,--detach}'[detach; print session id]' \
                         '(-C --cwd)'{-C+,--cwd=}'[working directory]:directory:_live_cwds' \
@@ -223,7 +258,7 @@ _live() {
                         '*::command:_normal'
                     ;;
                 ls)
-                    _arguments \
+                    _arguments -s \
                         '(-a --all)'{-a,--all} \
                         '(-g --global -C --cwd)'{-g,--global} \
                         '(-C --cwd -g --global)'{-C+,--cwd=}'[directory scope]:directory:_live_cwds' \
@@ -231,7 +266,7 @@ _live() {
                         '1:selector:_live_selectors'
                     ;;
                 cat)
-                    _arguments \
+                    _arguments -s \
                         '(-v --verbose)'{-v,--verbose} \
                         '(-g --global -C --cwd)'{-g,--global} \
                         '(-C --cwd -g --global)'{-C+,--cwd=}'[directory scope]:directory:_live_cwds' \
@@ -240,7 +275,7 @@ _live() {
                         '1:selector:_live_selectors'
                     ;;
                 less)
-                    _arguments \
+                    _arguments -s \
                         '(-g --global -C --cwd)'{-g,--global} \
                         '(-C --cwd -g --global)'{-C+,--cwd=}'[directory scope]:directory:_live_cwds' \
                         '(--strip-ansi --raw)--strip-ansi' \
@@ -248,7 +283,7 @@ _live() {
                         '1:selector:_live_selectors'
                     ;;
                 head)
-                    _arguments \
+                    _arguments -s \
                         '(-v --verbose)'{-v,--verbose} \
                         '(-g --global -C --cwd)'{-g,--global} \
                         '(-C --cwd -g --global)'{-C+,--cwd=}'[directory scope]:directory:_live_cwds' \
@@ -260,7 +295,7 @@ _live() {
                         '1:selector:_live_selectors'
                     ;;
                 tail)
-                    _arguments \
+                    _arguments -s \
                         '(-v --verbose)'{-v,--verbose} \
                         '(-f --follow)'{-f,--follow} \
                         '(-g --global -C --cwd)'{-g,--global} \
@@ -273,14 +308,14 @@ _live() {
                         '1:selector:_live_selectors'
                     ;;
                 stop)
-                    _arguments \
+                    _arguments -s \
                         '(-g --global -C --cwd)'{-g,--global} \
                         '(-C --cwd -g --global)'{-C+,--cwd=}'[directory scope]:directory:_live_cwds' \
                         '--all' \
                         '*:selector:_live_selectors'
                     ;;
                 rm)
-                    _arguments \
+                    _arguments -s \
                         '(-f --force)'{-f,--force} \
                         '(-g --global -C --cwd)'{-g,--global} \
                         '(-C --cwd -g --global)'{-C+,--cwd=}'[directory scope]:directory:_live_cwds' \
@@ -323,10 +358,10 @@ _live_verbs() {
 # Selector completion. For `live ls`, only suggest active sessions unless -a
 # was typed; `stop` only suggests active sessions; other verbs always include
 # exited (still valid targets). Honors -g/--global and -C/--cwd when present
-# in the command line.
+# in the command line, clustered (`-ag`, `-aC <dir>`) or attached (`-C<dir>`).
 _live_selectors() {
     local -a sel_args names
-    local i want_all=0 want_global=0
+    local i cluster want_all=0 want_global=0
     for (( i=2; i <= $#words; i++ )); do
         case $words[i] in
             -a|--all) want_all=1 ;;
@@ -334,6 +369,19 @@ _live_selectors() {
             -C|--cwd) (( i < $#words )) && sel_args+=(-C "$words[i+1]") ;;
             --cwd=*) sel_args+=(-C "${words[i]#--cwd=}") ;;
             -C*) sel_args+=(-C "${words[i]#-C}") ;;
+            --*) ;;
+            -*)
+                cluster="${words[i]%%C*}"  # short flags before any -C value
+                [[ $cluster == *a* ]] && want_all=1
+                [[ $cluster == *g* ]] && want_global=1
+                if [[ $words[i] != "$cluster" ]]; then
+                    if [[ -n ${words[i]##*C} ]]; then
+                        sel_args+=(-C "${words[i]#*C}")  # attached: -aC<dir>
+                    else
+                        (( i < $#words )) && sel_args+=(-C "$words[i+1]")
+                    fi
+                fi
+                ;;
         esac
     done
     case $words[1] in
@@ -362,26 +410,40 @@ _live "$@"
 
 FISH = r"""# fish completion for live
 
+# True when a short-flag cluster contains the letter $argv[1] (`-ag`);
+# letters inside an attached `-C` value don't count.
+function __live_cluster_has
+    for t in $argv[2..-1]
+        string match -qr -- "^-[^-C]*$argv[1]" $t; and return 0
+    end
+    return 1
+end
+
 function __live_selectors
     set -l toks (commandline -opc)
     set -l verb $toks[2]
     set -l args
     if test "$verb" = "stop"
         # active sessions only
-    else if test "$verb" != "ls"; or contains -- -a $toks; or contains -- --all $toks
+    else if test "$verb" != "ls"; or contains -- --all $toks; or __live_cluster_has a $toks
         set -a args -a
     end
-    if contains -- -g $toks; or contains -- --global $toks
+    if contains -- --global $toks; or __live_cluster_has g $toks
         set -a args -g
     end
-    set -l idx (contains -i -- -C $toks; or contains -i -- --cwd $toks)
-    if test -n "$idx"; and test $idx -lt (count $toks)
-        set -a args -C $toks[(math $idx + 1)]
-    else
-        set -l kv (string match -r -- '^--cwd=(.+)' $toks)
-        if test (count $kv) -ge 2
-            set -a args -C $kv[2]
+    # -C value: next token (exact or cluster-final), --cwd=DIR, or attached -CDIR.
+    set -l n (count $toks)
+    set -l i 2
+    while test $i -le $n
+        set -l t $toks[$i]
+        if test "$t" = --cwd; or string match -qr -- '^-[^-]*C$' $t
+            test $i -lt $n; and set -a args -C $toks[(math $i + 1)]
+        else if string match -qr -- '^--cwd=.' $t
+            set -a args -C (string replace -- --cwd= '' $t)
+        else if string match -qr -- '^-C.' $t
+            set -a args -C (string sub -s 3 -- $t)
         end
+        set i (math $i + 1)
     end
     live completion selectors $args 2>/dev/null
 end
@@ -410,7 +472,12 @@ function __live_run_needs_flags
             case -n --name -C --cwd --geometry
                 set i (math $i + 2)
             case '-*'
-                set i (math $i + 1)
+                # A cluster ending in a value-taking flag skips its value too.
+                if string match -qr -- '^-[^-nC][^-]*[nC]$' $toks[$i]
+                    set i (math $i + 2)
+                else
+                    set i (math $i + 1)
+                end
             case '*'
                 return 1
         end
@@ -511,8 +578,10 @@ complete -c live -n "__live_verb_is run; and __live_run_needs_flags" -s n -l nam
 complete -c live -n "__live_verb_is run; and __live_run_needs_flags" -s d -l detach -d 'Detach; print session id.'
 complete -c live -n "__live_verb_is run; and __live_run_needs_flags" -s C -l cwd -x -a "(__live_cwds)" -d 'Working directory.'
 complete -c live -n "__live_verb_is run; and __live_run_needs_flags" -l geometry -r -d 'PTY size as COLSxROWS.'
+# Trailing args are value-taking flags to skip; the helper matches tokens
+# exactly, so clustered forms (`-dn`, `-dC`) must be listed too.
 complete -c live -n "__live_verb_is run" \
-    -a "(__fish_complete_subcommand --fcs-skip=2 -n --name -C --cwd --geometry)"
+    -a "(__fish_complete_subcommand --fcs-skip=2 -n --name -C --cwd --geometry -dn -dC)"
 
 # completion / completion-script / update-shell
 complete -c live -n "__live_verb_is completion" -a "selectors cwds"

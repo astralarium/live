@@ -13,11 +13,7 @@ from pathlib import Path
 
 
 def _ls_names(stdout: str) -> set[str]:
-    return {
-        json.loads(ln).get("name")
-        for ln in stdout.splitlines()
-        if ln.strip()
-    }
+    return {json.loads(ln).get("name") for ln in stdout.splitlines() if ln.strip()}
 
 
 def test_ls_excludes_sibling_dir_session(project: Path, run_live) -> None:
@@ -42,9 +38,7 @@ def test_ls_global_includes_sibling_dir_session(project: Path, run_live) -> None
     assert "in-A" in _ls_names(out.stdout)
 
 
-def test_ls_default_scope_includes_descendant_session(
-    project: Path, run_live
-) -> None:
+def test_ls_default_scope_includes_descendant_session(project: Path, run_live) -> None:
     a = project / "A"
     sub = a / "deep" / "sub"
     sub.mkdir(parents=True)
@@ -62,7 +56,7 @@ def test_cat_respects_scope(project: Path, run_live) -> None:
     run_live(a, "run", "-n", "elsewhere", "--", "sh", "-c", "echo hi")
 
     miss = run_live(b, "cat", "elsewhere", check=False)
-    assert miss.returncode == 2
+    assert miss.returncode == 1
     assert "no such session" in miss.stderr
 
     hit = run_live(b, "cat", "-g", "elsewhere")
@@ -110,7 +104,14 @@ def test_run_cwd_flag_runs_and_scopes_there(project: Path, run_live) -> None:
 
 def test_run_cwd_flag_missing_dir_errors(project: Path, run_live) -> None:
     miss = run_live(
-        project, "run", "-C", str(project / "nope"), "--", "sh", "-c", "echo hi",
+        project,
+        "run",
+        "-C",
+        str(project / "nope"),
+        "--",
+        "sh",
+        "-c",
+        "echo hi",
         check=False,
     )
     assert miss.returncode == 2
@@ -125,9 +126,7 @@ def test_cwd_and_global_flags_conflict(project: Path, run_live) -> None:
 def test_cwd_flag_rejects_empty_value(project: Path, run_live) -> None:
     """`-C ""` (e.g. an unset shell variable) must error, not silently
     resolve to the invoking directory."""
-    miss = run_live(
-        project, "run", "-C", "", "--", "sh", "-c", "echo hi", check=False
-    )
+    miss = run_live(project, "run", "-C", "", "--", "sh", "-c", "echo hi", check=False)
     assert miss.returncode == 2
     assert "expected a directory path" in miss.stderr
 

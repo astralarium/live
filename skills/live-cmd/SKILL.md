@@ -58,6 +58,8 @@ With `-v`, log content goes to stdout and `live` metadata goes to stderr:
   `live: exit=inconsistent`
 - hung: alive, but stalled
   `live: status=hung last-activity=<s>`
+- tty closed: output detached but child is running
+  `live: tty closed; no further output`
 - gap: rotation dropped output (at most one per read)
   `live: dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)`
 - partial: partial line (eg. progress bars)
@@ -72,11 +74,11 @@ Save `next-line` (or `next-byte`) from the trailer, then poll for new data:
 
 ```bash
 live tail -vn +42 server   # lines from line 42 onward
-live tail -vc +250 server  # bytes from offset 250 onward
+live tail -vc +250 server  # bytes from position 250 (1-based)
 ```
 
 Each call prints trailer data; feed `next-line`/`next-byte` into the next poll.
-If trailer `id` changes, the name now points at a new session — reset cursor to 0.
+If trailer `id` changes, the name now points at a new session — reset cursors to 1.
 
 ## Stop and clean up
 

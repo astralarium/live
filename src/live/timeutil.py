@@ -11,23 +11,30 @@ import re
 import time
 from datetime import datetime
 
-_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([dhms])\s*$")
+# Units strictly descending (d, h, m, s), each at most once.
+_DURATION_RE = re.compile(
+    r"^\s*"
+    r"(?:(\d+(?:\.\d+)?)\s*d\s*)?"
+    r"(?:(\d+(?:\.\d+)?)\s*h\s*)?"
+    r"(?:(\d+(?:\.\d+)?)\s*m\s*)?"
+    r"(?:(\d+(?:\.\d+)?)\s*s\s*)?"
+    r"$"
+)
+_UNIT_SECS = (86400, 3600, 60, 1)  # d, h, m, s
 
 
 def duration_secs(value: str) -> float | None:
-    """`7d`/`12h`/`30m`/`60s` -> seconds; None if not a duration."""
+    """`30m`/`7d` or compound `2h30m`/`1d2h3m4s` -> seconds; None if not a duration."""
     m = _DURATION_RE.match(value)
-    if m is None:
+    if m is None or not any(m.groups()):
         return None
-    n = float(m.group(1))
-    unit = {"d": 86400, "h": 3600, "m": 60, "s": 1}[m.group(2)]
-    return n * unit
+    return sum(float(n) * u for n, u in zip(m.groups(), _UNIT_SECS) if n)
 
 
 def parse_age(value: str) -> float:
     """Return a cutoff in epoch seconds. Sessions exited before it count as older.
 
-    Duration form: `7d`, `12h`, `30m`, `60s` → `now - N`.
+    Duration form: `7d`, `30m`, or compound `2h30m`, `1d2h3m4s` → `now - N`.
     Absolute form: ISO date/datetime (`2026-01-01`, `2026-01-01T12:00:00`); naive
     timestamps are interpreted as local time.
     """
@@ -38,7 +45,7 @@ def parse_age(value: str) -> float:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"expected duration (e.g. 7d, 12h, 30m, 60s) or ISO datetime (got {value!r})"
+            f"expected duration (e.g. 7d, 30m, 2h30m) or ISO datetime (got {value!r})"
         )
 
 
@@ -46,7 +53,7 @@ def parse_time(value: str) -> float:
     """Return a reference time in epoch seconds.
 
     Epoch form: `1781204738.513` (the trailer's `last-time`).
-    Duration form: `7d`, `12h`, `30m`, `60s` → `now - N`.
+    Duration form: `7d`, `30m`, or compound `2h30m`, `1d2h3m4s` → `now - N`.
     Absolute form: ISO date/datetime; naive timestamps are local time.
     """
     secs = duration_secs(value)
@@ -60,7 +67,7 @@ def parse_time(value: str) -> float:
         return datetime.fromisoformat(value).timestamp()
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"expected epoch seconds, duration (e.g. 30m), "
+            f"expected epoch seconds, duration (e.g. 30m, 2h30m), "
             f"or ISO datetime (got {value!r})"
         )
 

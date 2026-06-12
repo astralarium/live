@@ -12,7 +12,13 @@ from pathlib import Path
 def test_tail_c_plus_emits_bytes_after_cursor(project: Path, run_live) -> None:
     """Probe next-byte, then `tail -c +K` should emit only bytes after position K."""
     run_live(
-        project, "run", "-n", "bc", "--", "sh", "-c",
+        project,
+        "run",
+        "-n",
+        "bc",
+        "--",
+        "sh",
+        "-c",
         "echo aaa; echo bbb; echo ccc",
     )
     # Get full read + trailer next-byte.
@@ -21,13 +27,13 @@ def test_tail_c_plus_emits_bytes_after_cursor(project: Path, run_live) -> None:
     assert m, full.stderr
     total = int(m.group(1))
 
-    # Pick a midpoint cursor: end of first line ("aaa\r\n" = 5 bytes on disk).
-    cursor = 5
-    out = run_live(project, "tail", "-c", f"+{cursor}", "bc")
+    # 1-based GNU position: "aaa\r\n" is bytes 1-5, so +6 starts at "bbb".
+    out = run_live(project, "tail", "-c", "+6", "bc")
     text = out.stdout.replace("\r", "")
     assert "bbb" in text and "ccc" in text
     assert "aaa" not in text
-    assert total == 15  # sanity: 3 lines * 5 bytes each on disk
+    # 15 bytes on disk (3 lines * 5); next unread position is 16.
+    assert total == 16
 
 
 def test_tail_c_plus_cursor_at_end_is_empty(project: Path, run_live) -> None:
@@ -63,8 +69,9 @@ def test_tail_c_minus_treated_as_count(project: Path, run_live) -> None:
 
 def test_tail_c_emits_last_k_bytes(project: Path, run_live) -> None:
     """`tail -c K` emits exactly the last K bytes of the on-disk stream."""
-    run_live(project, "run", "-n", "bc5", "--", "sh", "-c",
-             "echo aaa; echo bbb; echo ccc")
+    run_live(
+        project, "run", "-n", "bc5", "--", "sh", "-c", "echo aaa; echo bbb; echo ccc"
+    )
     full = run_live(project, "cat", "bc5", text=False).stdout
     out = run_live(project, "tail", "-c", "5", "bc5", text=False).stdout
     # On-disk: b"aaa\r\nbbb\r\nccc\r\n" = 15 bytes. Last 5 = b"ccc\r\n".
@@ -94,14 +101,20 @@ def test_bytes_since_reports_partial_line(
     project: Path, live_env, run_live, wait_for, wait_for_session
 ) -> None:
     """Byte-mode (`tail -vc +0`) surfaces the partial-line marker."""
-    script = (
-        "printf 'complete line\\n'; "
-        "printf 'partial prompt > '; "
-        "sleep 10"
-    )
+    script = "printf 'complete line\\n'; printf 'partial prompt > '; sleep 10"
     proc = subprocess.Popen(
-        [sys.executable, "-m", "live.cli", "run", "-n", "bc_partial", "--",
-         "sh", "-c", script],
+        [
+            sys.executable,
+            "-m",
+            "live.cli",
+            "run",
+            "-n",
+            "bc_partial",
+            "--",
+            "sh",
+            "-c",
+            script,
+        ],
         cwd=str(project),
         env=live_env,
         stdout=subprocess.DEVNULL,
@@ -147,7 +160,13 @@ def test_first_byte_advances_after_rotation(project: Path, run_live) -> None:
     lifetime offset where retained data begins, and `lastByte` is the tip."""
     _configure_rotation(project, segment_kb=1, max_kb=2)
     run_live(
-        project, "run", "-n", "spam", "--", "sh", "-c",
+        project,
+        "run",
+        "-n",
+        "spam",
+        "--",
+        "sh",
+        "-c",
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
@@ -163,7 +182,13 @@ def test_bytes_since_below_floor_warns_and_resumes(project: Path, run_live) -> N
     resumes at the floor."""
     _configure_rotation(project, segment_kb=1, max_kb=2)
     run_live(
-        project, "run", "-n", "drop", "--", "sh", "-c",
+        project,
+        "run",
+        "-n",
+        "drop",
+        "--",
+        "sh",
+        "-c",
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )
@@ -172,18 +197,23 @@ def test_bytes_since_below_floor_warns_and_resumes(project: Path, run_live) -> N
     )
     first_byte = info["firstByte"]
     last_byte = info["lastByte"]
-    assert first_byte > 0, "rotation must have advanced firstByte for this to be meaningful"
-
-    out = run_live(project, "tail", "-vc", "+0", "drop", text=False)
-    stderr = out.stderr.decode()
-    m = re.search(
-        r"dropped (\d+) bytes \(from-byte=(\d+), first-byte=(\d+)\)", stderr
+    assert first_byte > 0, (
+        "rotation must have advanced firstByte for this to be meaningful"
     )
+
+    out = run_live(project, "tail", "-vc", "+1", "drop", text=False)
+    stderr = out.stderr.decode()
+    m = re.search(r"dropped (\d+) bytes \(from-byte=(\d+), first-byte=(\d+)\)", stderr)
     assert m, f"missing/malformed gap warning: {stderr!r}"
-    dropped, from_byte, reported_floor = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    assert from_byte == 0
-    assert reported_floor == first_byte
-    assert dropped == first_byte  # K bytes dropped == floor offset when starting at 0
+    dropped, from_byte, reported_floor = (
+        int(m.group(1)),
+        int(m.group(2)),
+        int(m.group(3)),
+    )
+    # Positions are 1-based: the floor offset F is position F+1.
+    assert from_byte == 1
+    assert reported_floor == first_byte + 1
+    assert dropped == first_byte  # bytes dropped == floor offset when starting at 1
     # Resumes at the floor: stdout byte length equals retained range.
     assert len(out.stdout) == last_byte - first_byte
 
@@ -193,7 +223,13 @@ def test_bytes_since_above_floor_resumes_cleanly(project: Path, run_live) -> Non
     that lifetime offset — no `dropped` warning."""
     _configure_rotation(project, segment_kb=1, max_kb=2)
     run_live(
-        project, "run", "-n", "resume", "--", "sh", "-c",
+        project,
+        "run",
+        "-n",
+        "resume",
+        "--",
+        "sh",
+        "-c",
         "i=0; while [ $i -lt 250 ]; do "
         "printf 'line-number-%04d-with-padding\\n' $i; i=$((i+1)); done",
     )

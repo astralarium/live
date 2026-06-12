@@ -7,8 +7,7 @@ from pathlib import Path
 
 # A short script that writes ANSI color codes around a word.
 _ANSI_SCRIPT = (
-    "printf '\\033[31mred\\033[0m\\n'; "
-    "printf '\\033[1;32mbold-green\\033[0m\\n'"
+    "printf '\\033[31mred\\033[0m\\n'; printf '\\033[1;32mbold-green\\033[0m\\n'"
 )
 
 
@@ -16,7 +15,9 @@ def _record(project: Path, run_live) -> None:
     run_live(project, "run", "-n", "colors", "--", "sh", "-c", _ANSI_SCRIPT)
 
 
-def test_cat_strips_ansi_by_default_when_stdout_not_tty(project: Path, run_live) -> None:
+def test_cat_strips_ansi_by_default_when_stdout_not_tty(
+    project: Path, run_live
+) -> None:
     _record(project, run_live)
     out = run_live(project, "cat", "colors").stdout
     assert "\x1b[" not in out

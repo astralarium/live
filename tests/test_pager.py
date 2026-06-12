@@ -8,7 +8,18 @@ import time
 from pathlib import Path
 
 from live.config import Config
-from live.pager import Line, PagerSource, PagerState, SourceEvent
+from live.format import IDX_HEADER, IDX_RECORD
+from live.pager import (
+    Line,
+    PagerSource,
+    PagerState,
+    PartialTail,
+    SourceEvent,
+    _drain_source,
+    _feed_prompt_byte,
+    _scan_from,
+    _ScanCursor,
+)
 
 
 def _mk(n: int, text: str = "x") -> Line:
@@ -324,9 +335,7 @@ def test_search_repeat_n_advances_past_current_match() -> None:
 
 
 def test_search_repeat_N_reverses_direction() -> None:
-    s = PagerState(
-        lines=[_mk(1, "match1"), _mk(2, "x"), _mk(3, "match2")]
-    )
+    s = PagerState(lines=[_mk(1, "match1"), _mk(2, "x"), _mk(3, "match2")])
     s.resize(10)
     assert s.search("match", "forward")
     assert s.search_last_match == 0
@@ -443,9 +452,7 @@ def test_visible_matches_returns_positions_in_viewport() -> None:
 _CFG = Config(ttl_days=7, max_kb=4096, segment_kb=1024, heartbeat_sec=30)
 
 
-def _drain_until(
-    source_queue, predicate, *, timeout: float = 5.0
-):
+def _drain_until(source_queue, predicate, *, timeout: float = 5.0):
     """Pop items from a source queue until `predicate(item)` is truthy. Returns
     the matching item, or None on timeout."""
     deadline = time.time() + timeout
@@ -497,3 +504,259 @@ def test_pager_source_emits_exit_when_recorder_finishes(
         assert event.info.exit_code == 0
     finally:
         source.stop()
+
+
+# ----- partial tail -----
+
+
+def test_partial_tail_appears_as_trailing_line() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 4)])
+    s.resize(10)
+    s.set_partial(PartialTail(text=b"prog 10%", end_byte=100))
+    vis = s.visible()
+    assert vis[-1].text == b"prog 10%"
+    assert vis[-1].n == 4  # predicted: next consecutive line number
+    assert s.new_count() == 0  # partial doesn't tick the +K counter
+
+
+def test_partial_tail_growth_updates_in_place() -> None:
+    s = PagerState(lines=[_mk(1)])
+    s.resize(10)
+    s.set_partial(PartialTail(text=b"prog 10%", end_byte=10))
+    s.set_partial(PartialTail(text=b"prog 10%\rprog 90%", end_byte=19))
+    vis = s.visible()
+    assert len(vis) == 2  # grew, not duplicated
+    assert vis[-1].text == b"prog 10%\rprog 90%"
+    assert vis[-1].end_byte == 19
+
+
+def test_partial_converts_to_indexed_line_without_duplication() -> None:
+    s = PagerState(lines=[_mk(1)])
+    s.resize(10)
+    s.set_partial(PartialTail(text=b"par", end_byte=5))
+    s.feed_lines([Line(text=b"partial\n", n=2, t=2.0, end_byte=10)])
+    s.set_partial(PartialTail(text=b"", end_byte=10))
+    assert s.partial is None
+    assert [line.text for line in s.visible()] == [b"x\n", b"partial\n"]
+
+
+def test_feed_lines_drops_partial_covered_by_commit() -> None:
+    # The committed line covers the partial's bytes before the source's
+    # cleared-tail message arrives; no duplicate row in the meantime.
+    s = PagerState(lines=[_mk(1)])
+    s.resize(10)
+    s.set_partial(PartialTail(text=b"par", end_byte=5))
+    s.feed_lines([Line(text=b"partial\n", n=2, t=2.0, end_byte=10)])
+    assert s.partial is None
+    assert len(s.visible()) == 2
+
+
+def test_partial_renumbers_after_unrelated_commit() -> None:
+    s = PagerState(lines=[_mk(1)])
+    s.resize(10)
+    s.set_partial(PartialTail(text=b"tail", end_byte=20))
+    assert s.partial.n == 2
+    # Commit that ends below the partial's bytes: partial stays, renumbered.
+    s.feed_lines([Line(text=b"two\n", n=2, t=2.0, end_byte=6)])
+    assert s.partial is not None
+    assert s.partial.n == 3
+
+
+def test_partial_only_session_displays_and_converts() -> None:
+    s = PagerState()
+    s.resize(5)
+    s.set_partial(PartialTail(text=b"boot...", end_byte=7))
+    assert s.visible()[0].n == 1
+    assert s.status_text("abc").startswith("id=abc")
+    s.feed_lines([Line(text=b"boot...\n", n=1, t=1.0, end_byte=8)])
+    assert s.partial is None
+    assert [line.n for line in s.visible()] == [1]
+
+
+def test_partial_counts_toward_scroll_extent() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 5)])
+    s.resize(3)
+    s.set_partial(PartialTail(text=b"tail", end_byte=20))
+    s.scroll_down(10)
+    assert s.view_top == 2  # 5 display rows incl partial; natural max = 2
+    assert s.visible()[-1].text == b"tail"
+
+
+def test_goto_line_reaches_partial() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 5)])
+    s.resize(3)
+    s.set_partial(PartialTail(text=b"tail", end_byte=20))
+    s.goto_line(5)
+    assert s.visible()[0].text == b"tail"
+
+
+def test_partial_clear_clamps_overscrolled_view() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 5)])
+    s.resize(3)
+    s.set_partial(PartialTail(text=b"tail", end_byte=20))
+    s.view_top = 4  # search-style overscroll: partial at top row
+    s.set_partial(None)
+    assert s.view_top == 3  # clamped back to the last committed line
+
+
+def test_status_counts_partial_as_predicted_last_line() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 11)])  # end_byte = 2n
+    s.resize(3)
+    s.set_partial(PartialTail(text=b"tail", end_byte=25))
+    status = s.status_text("abc")
+    assert "at-line=3/11" in status
+    assert "at-byte=6/25" in status
+    s.goto_end()
+    assert "at-line=11/11" in s.status_text("abc")
+
+
+# ----- search in partial tail -----
+
+
+def test_search_matches_inside_partial_tail() -> None:
+    s = PagerState(lines=[_mk(i) for i in range(1, 6)])
+    s.resize(3)
+    s.set_partial(PartialTail(text=b"needle in tail", end_byte=99))
+    assert s.search("needle", "forward")
+    assert s.view_top == 5  # partial row scrolled to top
+    assert s.visible()[0].text == b"needle in tail"
+    matches = s.visible_matches()
+    assert matches and matches[0] == (0, 0, len("needle"))
+
+
+def test_partial_growth_refreshes_visible_matches() -> None:
+    s = PagerState(lines=[_mk(1)])
+    s.resize(5)
+    s.set_partial(PartialTail(text=b"ab", end_byte=10))
+    assert s.search("ab", "forward")
+    assert len(s.visible_matches()) == 1
+    s.set_partial(PartialTail(text=b"abab", end_byte=12))
+    assert len(s.visible_matches()) == 2  # memo keyed off the growing tail
+
+
+def test_search_highlights_fresh_after_partial_conversion() -> None:
+    s = PagerState(lines=[_mk(1)])
+    s.resize(5)
+    s.set_partial(PartialTail(text=b"ab", end_byte=4))
+    assert s.search("ab", "forward")
+    # Commits with different content at the same buffer index as the partial.
+    s.feed_lines([Line(text=b"QQab\n", n=2, t=2.0, end_byte=9)])
+    s.set_partial(PartialTail(text=b"", end_byte=9))
+    assert s.visible_matches() == [(0, 2, 4)]  # no stale partial-era memo
+
+
+def test_unicode_pattern_matches_unicode_text() -> None:
+    s = PagerState(lines=[_mk(1, "naïve £ output")])
+    s.resize(5)
+    assert s.search("naïve £", "forward")
+
+
+def test_unicode_prompt_input_builds_and_submits() -> None:
+    s = PagerState(lines=[_mk(1, "naïve output")])
+    s.resize(5)
+    s.start_prompt("forward")
+    pending = b""
+    for byte in "naïve".encode("utf-8"):
+        pending, text = _feed_prompt_byte(pending, byte)
+        if text:
+            s.append_prompt(text)
+    assert s.prompt_buffer == "naïve"
+    assert s.submit_prompt()
+
+
+# ----- prompt UTF-8 byte decoding -----
+
+
+def test_feed_prompt_byte_ascii_passthrough() -> None:
+    assert _feed_prompt_byte(b"", ord("a")) == (b"", "a")
+
+
+def test_feed_prompt_byte_two_byte_sequence() -> None:
+    pending, text = _feed_prompt_byte(b"", 0xC3)
+    assert (pending, text) == (b"\xc3", "")
+    assert _feed_prompt_byte(pending, 0xA9) == (b"", "é")
+
+
+def test_feed_prompt_byte_three_byte_sequence() -> None:
+    pending = b""
+    out = ""
+    for byte in "✓".encode("utf-8"):
+        pending, text = _feed_prompt_byte(pending, byte)
+        out += text
+    assert (pending, out) == (b"", "✓")
+
+
+def test_feed_prompt_byte_four_byte_emoji() -> None:
+    pending = b""
+    out = ""
+    for byte in "😀".encode("utf-8"):
+        pending, text = _feed_prompt_byte(pending, byte)
+        out += text
+    assert (pending, out) == (b"", "😀")
+
+
+def test_feed_prompt_byte_invalid_bytes_dropped() -> None:
+    assert _feed_prompt_byte(b"", 0xFF) == (b"", "")  # invalid lead
+    assert _feed_prompt_byte(b"", 0x80) == (b"", "")  # bare continuation
+
+
+def test_feed_prompt_byte_broken_sequence_salvages_next_char() -> None:
+    # Lead byte followed by ASCII: drop the broken lead, keep the ASCII.
+    assert _feed_prompt_byte(b"\xc3", ord("a")) == (b"", "a")
+
+
+def test_feed_prompt_byte_ignores_curses_function_keys() -> None:
+    assert _feed_prompt_byte(b"", 0x10B) == (b"", "")  # KEY_* codes > 0xFF
+
+
+# ----- _scan_from partial extraction -----
+
+
+def _write_idx(path: Path, recs: list[tuple[int, float, int]]) -> None:
+    """Idx fixture: header (segment start, line start) + (n, t, b) records."""
+    buf = IDX_HEADER.pack(0, 0)
+    for n, t, b in recs:
+        buf += IDX_RECORD.pack(n, t, b)
+    path.write_bytes(buf)
+
+
+def test_scan_from_partial_lifecycle(tmp_path: Path) -> None:
+    sess = tmp_path / "sess"
+    sess.mkdir()
+    stream = sess / "stream.0000.log"
+    idx = sess / "lines.0000.idx"
+
+    # Two indexed lines plus an unterminated tail.
+    stream.write_bytes(b"one\ntwo\npar")
+    _write_idx(idx, [(1, 1.0, 0), (2, 2.0, 4)])
+    cur = _ScanCursor()
+    lines, partial = _scan_from(sess, cur)
+    assert [line.text for line in lines] == [b"one\n", b"two\n"]
+    assert partial == PartialTail(text=b"par", end_byte=11)
+
+    # Tail grows; no new indexed lines.
+    stream.write_bytes(b"one\ntwo\npartial")
+    lines, partial = _scan_from(sess, cur)
+    assert lines == []
+    assert partial == PartialTail(text=b"partial", end_byte=15)
+
+    # Newline + idx record arrive: tail becomes a committed line and clears.
+    stream.write_bytes(b"one\ntwo\npartial\n")
+    _write_idx(idx, [(1, 1.0, 0), (2, 2.0, 4), (3, 3.0, 8)])
+    lines, partial = _scan_from(sess, cur)
+    assert [line.text for line in lines] == [b"partial\n"]
+    assert partial == PartialTail(text=b"", end_byte=16)
+
+
+def test_drain_source_applies_lines_before_partial(tmp_path: Path) -> None:
+    # Queue order is lines-then-tail; the drain must feed lines first so the
+    # partial is numbered against the freshly committed last line.
+    source = PagerSource(tmp_path, _CFG, initial_cursor=0)
+    s = PagerState(lines=[_mk(1)])
+    s.resize(10)
+    source.queue.put(Line(text=b"two\n", n=2, t=2.0, end_byte=8))
+    source.queue.put(PartialTail(text=b"tail", end_byte=12))
+    _drain_source(source, s)
+    assert [line.n for line in s.lines] == [1, 2]
+    assert s.partial is not None
+    assert s.partial.n == 3

@@ -22,8 +22,9 @@ def test_ls_reports_hung_when_idx_mtime_is_stale(
     proc = spawn_run("-n", "longrun")
     sess_dir = wait_for_session()
     idx = sess_dir / "lines.0000.idx"
-    assert wait_for(lambda: idx.exists() and idx.stat().st_size > 0,
-                    timeout=8.0), "no indexed line ever appeared"
+    assert wait_for(lambda: idx.exists() and idx.stat().st_size > 0, timeout=8.0), (
+        "no indexed line ever appeared"
+    )
     # Freeze the recorder so no heartbeat or trailing startup write can
     # re-touch the idx after the backdate. A stopped process still holds the
     # lock, which is exactly the "hung" shape: alive but silent.
@@ -56,15 +57,16 @@ def test_heartbeat_advances_idx_mtime_while_silent(
     project: Path, spawn_run, wait_for, wait_for_session
 ) -> None:
     """The recorder touches the active idx mtime every heartbeatSec even while
-    no bytes flow. With heartbeatSec=1, mtime should advance during a 2.5s
-    quiet window."""
+    no bytes flow. With heartbeatSec=1, poll until the mtime advances; the wide
+    deadline tolerates a loaded machine starving the recorder loop."""
     _write_config(project, heartbeatSec=1)
     spawn_run("-n", "beat")
     sess_dir = wait_for_session()
     idx = sess_dir / "lines.0000.idx"
-    assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40,
-                    timeout=5.0), "no indexed line ever appeared"
+    assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40, timeout=8.0), (
+        "no indexed line ever appeared"
+    )
     t0 = idx.stat().st_mtime
-    time.sleep(2.5)
-    t1 = idx.stat().st_mtime
-    assert t1 > t0, f"idx mtime did not advance during silence: {t0} -> {t1}"
+    assert wait_for(lambda: idx.stat().st_mtime > t0, timeout=8.0), (
+        f"idx mtime did not advance during silence (stuck at {t0})"
+    )

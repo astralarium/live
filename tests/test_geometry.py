@@ -36,15 +36,31 @@ def test_geometry_flag_sets_pty_size(project: Path, run_live, wait_for) -> None:
 
 def test_geometry_applies_to_foreground_runs(project: Path, run_live) -> None:
     # Foreground with piped stdio (no TTY) also gets the explicit size.
-    run_live(project, "run", "-n", "fg", "--geometry", "120x40", "--",
-             "sh", "-c", "stty size")
+    run_live(
+        project,
+        "run",
+        "-n",
+        "fg",
+        "--geometry",
+        "120x40",
+        "--",
+        "sh",
+        "-c",
+        "stty size",
+    )
     assert run_live(project, "cat", "fg").stdout.split() == ["40", "120"]
 
 
 def test_geometry_rejects_malformed_values(project: Path, run_live) -> None:
     for bad in ("200", "x24", "200x", "0x24", "200x0", "axb", "80x24x10"):
         res = run_live(
-            project, "run", f"--geometry={bad}", "--", "sh", "-c", "echo x",
+            project,
+            "run",
+            f"--geometry={bad}",
+            "--",
+            "sh",
+            "-c",
+            "echo x",
             check=False,
         )
         assert res.returncode == 2, bad

@@ -69,7 +69,15 @@ def test_named_run_conflicts_while_running(
 
     for extra in ((), ("-d",)):
         clash = run_live(
-            project, "run", *extra, "-n", "job", "--", "sh", "-c", "echo x",
+            project,
+            "run",
+            *extra,
+            "-n",
+            "job",
+            "--",
+            "sh",
+            "-c",
+            "echo x",
             check=False,
         )
         assert clash.returncode == 1
@@ -107,9 +115,7 @@ def test_named_run_conflict_spans_ancestors_and_descendants(
     assert "live stop" in clash.stderr
 
     # Descendant dir: the parent's run is out of scope — no stop hint.
-    clash = run_live(
-        sub, "run", "-n", "job", "--", "sh", "-c", "echo x", check=False
-    )
+    clash = run_live(sub, "run", "-n", "job", "--", "sh", "-c", "echo x", check=False)
     assert clash.returncode == 1
     assert "already running in ancestor" in clash.stderr
     assert "live stop" not in clash.stderr
@@ -122,8 +128,19 @@ def test_concurrent_named_runs_admit_exactly_one(
     # racing starts serialize: one wins, the rest error out.
     procs = [
         subprocess.Popen(
-            [sys.executable, "-m", "live.cli", "run", "-d", "-n", "race",
-             "--", "sh", "-c", "sleep 60"],
+            [
+                sys.executable,
+                "-m",
+                "live.cli",
+                "run",
+                "-d",
+                "-n",
+                "race",
+                "--",
+                "sh",
+                "-c",
+                "sleep 60",
+            ],
             cwd=str(project),
             env=live_env,
             stdout=subprocess.PIPE,
@@ -147,10 +164,14 @@ def test_detach_with_closed_std_fds(
     # With fds 0-2 closed, the report pipe must not land on 0-2 where the
     # child's /dev/null dup2 dance would clobber it.
     res = subprocess.run(
-        ["sh", "-c",
-         'exec "$1" -m live.cli run -d -n closedfd -- '
-         'sh -c "echo ok; sleep 60" <&- >&- 2>&-',
-         "sh", sys.executable],
+        [
+            "sh",
+            "-c",
+            'exec "$1" -m live.cli run -d -n closedfd -- '
+            'sh -c "echo ok; sleep 60" <&- >&- 2>&-',
+            "sh",
+            sys.executable,
+        ],
         cwd=str(project),
         env=live_env,
     )
@@ -177,3 +198,44 @@ def test_run_rejects_unsafe_name(project: Path, run_live, name: str) -> None:
 @pytest.mark.parametrize("name", ["dev-server", "a.b_c", "X9", ".hidden", "0"])
 def test_run_accepts_safe_name(project: Path, run_live, name: str) -> None:
     run_live(project, "run", "-n", name, "--", "sh", "-c", "echo x")
+
+
+def test_run_named_bounded_wait_on_stuck_name_lock(project: Path, run_live) -> None:
+    """A wedged name-lock holder produces a notice, then a bounded error —
+    never a silent hang. Unnamed runs don't take the lock at all."""
+    import fcntl
+    import os
+    import time
+
+    live_dir = project / ".live"
+    live_dir.mkdir(mode=0o700, exist_ok=True)
+    holder = open(live_dir / "name.lock", "w")
+    try:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        holder.write(f"{os.getpid()}\n")
+        holder.flush()
+
+        t0 = time.time()
+        res = run_live(
+            project,
+            "run",
+            "-dn",
+            "stuck",
+            "--",
+            "sh",
+            "-c",
+            "echo hi",
+            check=False,
+        )
+        elapsed = time.time() - t0
+        assert res.returncode == 1
+        assert "waiting for name lock" in res.stderr
+        assert "timed out waiting for name lock" in res.stderr
+        assert f"held by pid {os.getpid()}" in res.stderr
+        assert 4.0 <= elapsed < 25  # ~5s timeout, generous upper bound
+
+        # Unnamed runs are unaffected by the name lock.
+        ok = run_live(project, "run", "-d", "--", "sh", "-c", "echo hi")
+        assert ok.returncode == 0
+    finally:
+        holder.close()

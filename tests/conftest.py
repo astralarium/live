@@ -31,12 +31,17 @@ def live_env(tmp_path: Path) -> dict:
 
 @pytest.fixture
 def run_live(live_env):
-    """Run `live <args>` and capture output. Pass `text=False` for raw bytes."""
+    """Run `live <args>` and capture output. Pass `text=False` for raw bytes.
+
+    `timeout` bounds every invocation so one wedged recorder can't hang the
+    whole suite."""
+
     def _run(
         cwd: Path,
         *args: str,
         check: bool = True,
         text: bool = True,
+        timeout: float = 30,
         **kw,
     ) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -46,6 +51,7 @@ def run_live(live_env):
             capture_output=True,
             text=text,
             check=check,
+            timeout=timeout,
             **kw,
         )
 
@@ -61,6 +67,7 @@ def project(tmp_path: Path) -> Path:
 @pytest.fixture
 def wait_for():
     """Poll `predicate` until it returns truthy or timeout elapses."""
+
     def _impl(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool:
         deadline = time.time() + interval + timeout
         while time.time() < deadline:
@@ -78,6 +85,7 @@ def wait_for_session(project: Path, wait_for):
 
     Returns the session directory `Path`. Asserts on timeout.
     """
+
     def _impl(timeout: float = 5.0) -> Path:
         sessions = project / ".live" / "sessions"
         assert wait_for(
@@ -101,8 +109,17 @@ def spawn_run(project: Path, live_env):
 
     def _spawn(*extra_args: str) -> subprocess.Popen:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "live.cli", "run", *extra_args, "--",
-             "sh", "-c", "echo go; sleep 60"],
+            [
+                sys.executable,
+                "-m",
+                "live.cli",
+                "run",
+                *extra_args,
+                "--",
+                "sh",
+                "-c",
+                "echo go; sleep 60",
+            ],
             cwd=str(project),
             env=live_env,
             stdout=subprocess.DEVNULL,

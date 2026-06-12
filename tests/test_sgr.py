@@ -5,6 +5,7 @@ from __future__ import annotations
 from live.ansi import (
     DEFAULT_STYLE,
     Style,
+    incomplete_escape_len,
     parse_spans,
     rgb_to_256,
     strip_ansi,
@@ -40,6 +41,18 @@ def test_strip_ansi_osc_window_title() -> None:
     assert strip_ansi(raw) == b"after\n"
 
 
+def test_strip_ansi_osc_st_terminator() -> None:
+    raw = b"\x1b]8;;http://x\x1b\\link\n"
+    assert strip_ansi(raw) == b"link\n"
+
+
+def test_strip_ansi_torn_osc_does_not_swallow_lines() -> None:
+    # An unterminated OSC strips only its own line — it must not consume
+    # real lines up to a later BEL.
+    raw = b"\x1b]0;title\nline2\nline3 \x07after\n"
+    assert strip_ansi(raw) == b"\nline2\nline3 \x07after\n"
+
+
 def test_strip_ansi_two_byte_escape() -> None:
     # ESC D (Index, 0x1B 0x44) is a 2-byte Fe escape in the @-_ range.
     raw = b"before\x1bDafter\n"
@@ -48,6 +61,33 @@ def test_strip_ansi_two_byte_escape() -> None:
 
 def test_strip_ansi_passthrough_for_clean_text() -> None:
     assert strip_ansi(b"plain text\n") == b"plain text\n"
+
+
+# ----- incomplete_escape_len (tail -f holdback) -----
+
+
+def test_incomplete_escape_len_torn_csi() -> None:
+    assert incomplete_escape_len(b"text\x1b") == 1
+    assert incomplete_escape_len(b"text\x1b[") == 2
+    assert incomplete_escape_len(b"text\x1b[3") == 3
+    assert incomplete_escape_len(b"text\x1b[31;4") == 6
+
+
+def test_incomplete_escape_len_torn_osc() -> None:
+    assert incomplete_escape_len(b"text\x1b]0;tit") == 7  # ESC ] 0 ; t i t
+
+
+def test_incomplete_escape_len_complete_sequences() -> None:
+    # Complete escapes are stripped normally — nothing to hold back.
+    assert incomplete_escape_len(b"text\x1b[31m") == 0
+    assert incomplete_escape_len(b"text\x1b]0;t\x07") == 0
+    assert incomplete_escape_len(b"text\x1bD") == 0
+    assert incomplete_escape_len(b"plain") == 0
+
+
+def test_incomplete_escape_len_capped() -> None:
+    # An "OSC" body past the cap is treated as content, not held forever.
+    assert incomplete_escape_len(b"\x1b]" + b"x" * 300) == 0
 
 
 # ----- span splitting -----
@@ -74,7 +114,11 @@ def test_concatenated_chunks_equal_stripped_text() -> None:
 def test_non_sgr_escapes_dropped_without_styling() -> None:
     # Cursor movement (CSI A), OSC title, and a 2-byte sequence.
     text = "\x1b[2Aa\x1b]0;title\x07b\x1bMc"
-    assert _spans(text) == [("a", DEFAULT_STYLE), ("b", DEFAULT_STYLE), ("c", DEFAULT_STYLE)]
+    assert _spans(text) == [
+        ("a", DEFAULT_STYLE),
+        ("b", DEFAULT_STYLE),
+        ("c", DEFAULT_STYLE),
+    ]
 
 
 def test_attributes_accumulate_and_reset() -> None:

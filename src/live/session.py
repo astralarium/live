@@ -31,6 +31,11 @@ from .state import mark_swept, should_sweep
 
 STATUS_DEAD = ("exited", "inconsistent")
 
+# A session dir with no process.lock is mid-startup (a microseconds window)
+# or a recorder that crashed inside it. Past this age it can never become
+# live, and with no meta it is invisible to ls/rm — sweep deletes it.
+STARTUP_ORPHAN_SEC = 3600
+
 
 @dataclass
 class SessionInfo:
@@ -73,7 +78,15 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
     lock_path = session_dir / LOCK_NAME
     held = probe_held(lock_path)
     if held is None:
-        return  # session in startup; skip this round
+        # No lock file: in startup, or orphaned by a crash before the lock
+        # was created. Only age can tell them apart.
+        try:
+            age = time.time() - session_dir.stat().st_mtime
+        except OSError:
+            return
+        if age > STARTUP_ORPHAN_SEC:
+            shutil.rmtree(session_dir, ignore_errors=True)
+        return
     if held:
         return  # recorder alive
 
@@ -100,19 +113,20 @@ def sweep_one(session_dir: Path, cfg: Config) -> None:
 
 def sweep_all(cfg: Config) -> None:
     """Sweep every session directory. Throttled to once per
-    `state.SWEEP_INTERVAL_SEC` via `~/.live/state.json`."""
+    `state.SWEEP_INTERVAL_SEC` via `~/.live/state.json`. The stamp lands
+    after the pass so a crash mid-sweep doesn't suppress the next one."""
     if not should_sweep():
         return
-    mark_swept()
     sdir = sessions_dir()
     try:
         entries = list(os.scandir(sdir))
     except FileNotFoundError:
-        return
+        entries = []
     for entry in entries:
         if not entry.is_dir(follow_symlinks=False):
             continue
         sweep_one(Path(entry.path), cfg)
+    mark_swept()
 
 
 def status_of(session_dir: Path, cfg: Config) -> str:
@@ -193,9 +207,7 @@ def session_info(session_dir: Path, cfg: Config) -> SessionInfo | None:
     )
 
 
-def list_sessions(
-    cfg: Config, *, cwd_filter: Path | None = None
-) -> list[SessionInfo]:
+def list_sessions(cfg: Config, *, cwd_filter: Path | None = None) -> list[SessionInfo]:
     """List sessions newest-first. If `cwd_filter` is set, keep only sessions
     whose `meta.cwd` is `cwd_filter` or a descendant."""
     sdir = sessions_dir()

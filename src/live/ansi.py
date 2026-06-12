@@ -19,7 +19,10 @@ _ANSI_PATTERN = r"""
     \x1B
     (?:
         \[ (?P<csi> [0-?]* ) [ -/]* (?P<final> [@-~] )   # CSI
-      | \] [^\x07]*? (?:\x07|\x1B\\)                     # OSC ... BEL or ESC \\
+      | \] [^\x07\x1B\n]* (?:\x07|\x1B\\|(?=\n))         # OSC ... BEL or ESC \\
+                                  # (body stops at newline: a torn OSC strips
+                                  # only its own line, never swallows real
+                                  # lines up to a later BEL)
       | [@-_]                                            # 2-byte (Fp, Fe, Fs)
     )
 """
@@ -30,6 +33,25 @@ _ANSI_BYTES_RE = re.compile(_ANSI_PATTERN.encode("ascii"), re.VERBOSE)
 def strip_ansi(data: bytes) -> bytes:
     """Remove ANSI/VT escape sequences from a byte stream."""
     return _ANSI_BYTES_RE.sub(b"", data)
+
+
+# Longest escape prefix a chunked stripper will withhold while waiting for
+# the terminator; anything longer is treated as content.
+_HOLDBACK_MAX = 256
+_INCOMPLETE_ESCAPE_RE = re.compile(rb"\x1B(?:\[[0-?]*[ -/]*|\][^\x07\x1B\n]*)?\Z")
+
+
+def incomplete_escape_len(data: bytes) -> int:
+    """Length of an unterminated trailing escape sequence (0 if none).
+
+    Chunk-wise strippers (`tail -f`) hold these bytes back until the rest of
+    the sequence arrives, so a CSI/OSC torn across reads is never emitted as
+    visible junk.
+    """
+    i = data.rfind(b"\x1b")
+    if i < 0 or len(data) - i > _HOLDBACK_MAX:
+        return 0
+    return len(data) - i if _INCOMPLETE_ESCAPE_RE.match(data, i) else 0
 
 
 def strip_ansi_str(text: str) -> str:
@@ -109,9 +131,7 @@ def _apply_sgr(style: Style, raw: str) -> Style:
             style = replace(style, italic=True)
         elif p == 4:
             # ITU T.416 colon form: 4:0 clears, 4:1..5 are underline styles.
-            style = replace(
-                style, underline=len(parts) < 2 or _to_int(parts[1]) != 0
-            )
+            style = replace(style, underline=len(parts) < 2 or _to_int(parts[1]) != 0)
         elif p in (5, 6):
             style = replace(style, blink=True)
         elif p == 7:
@@ -141,7 +161,9 @@ def _apply_sgr(style: Style, raw: str) -> Style:
         elif p in (38, 48):
             color, i = _extended_color(parts, tokens, i)
             if color is not None:
-                style = replace(style, fg=color) if p == 38 else replace(style, bg=color)
+                style = (
+                    replace(style, fg=color) if p == 38 else replace(style, bg=color)
+                )
             continue
         i += 1
     return style
@@ -171,9 +193,7 @@ def _extended_color(
         if mode == "2":
             raw = parts[3:6] if len(parts) >= 6 else parts[2:5]
             vals = [_to_int(v) for v in raw]
-            if len(vals) == 3 and all(
-                v is not None and 0 <= v <= 255 for v in vals
-            ):
+            if len(vals) == 3 and all(v is not None and 0 <= v <= 255 for v in vals):
                 return rgb_to_256(*vals), i + 1
         return None, i + 1
     mode = tokens[i + 1] if i + 1 < len(tokens) else ""
@@ -211,10 +231,22 @@ def rgb_to_256(r: int, g: int, b: int) -> int:
 
 
 _BASE16_RGB = [
-    (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0),
-    (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
-    (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0),
-    (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+    (0, 0, 0),
+    (205, 0, 0),
+    (0, 205, 0),
+    (205, 205, 0),
+    (0, 0, 238),
+    (205, 0, 205),
+    (0, 205, 205),
+    (229, 229, 229),
+    (127, 127, 127),
+    (255, 0, 0),
+    (0, 255, 0),
+    (255, 255, 0),
+    (92, 92, 255),
+    (255, 0, 255),
+    (0, 255, 255),
+    (255, 255, 255),
 ]
 
 

@@ -19,9 +19,9 @@ from .format import (
     read_idx_records,
     read_segment_line_start,
     read_segment_start,
-    segment_tip_byte,
     stream_name,
 )
+
 
 def should_strip_ansi(
     *,
@@ -78,7 +78,9 @@ class StreamView:
     data: bytes
     records: list[tuple[int, float, int]]
     last_end: int
-    line_start: int  # where the line containing data[0] began (== base at a line boundary)
+    line_start: (
+        int  # where the line containing data[0] began (== base at a line boundary)
+    )
 
     @property
     def tip(self) -> int:
@@ -138,6 +140,7 @@ def load_stream_view(session_dir: Path, *, from_byte: int | None = None) -> Stre
     length = 0
     records: list[tuple[int, float, int]] = []
     cursor = 0
+    seeked = False
     for ref in refs:
         start = read_segment_start(ref.idx_path)
         if start is None:
@@ -151,7 +154,16 @@ def load_stream_view(session_dir: Path, *, from_byte: int | None = None) -> Stre
                 cursor = start + size
                 continue
         try:
-            data = ref.stream_path.read_bytes()
+            if from_byte is not None and base is None and start < from_byte:
+                # First overlapping segment: read only bytes past the cursor,
+                # so a follow/pager poll is O(new bytes), not O(segment).
+                with ref.stream_path.open("rb") as f:
+                    f.seek(from_byte - start)
+                    data = f.read()
+                start = from_byte
+                seeked = True
+            else:
+                data = ref.stream_path.read_bytes()
         except FileNotFoundError:
             # Vanished under us: earlier accumulation is no longer contiguous.
             base, line_start, length = None, None, 0
@@ -174,6 +186,11 @@ def load_stream_view(session_dir: Path, *, from_byte: int | None = None) -> Stre
 
     if base is None:
         base = from_byte or 0
+    if seeked:
+        # Cursor reads start mid-segment: records for lines wholly below the
+        # cursor are already consumed, and head-truncation doesn't apply.
+        line_start = base
+        records = [r for r in records if r[2] >= base]
     if line_start is None:
         line_start = base
     data = b"".join(chunks)
@@ -214,7 +231,9 @@ class ReadResult:
     last_time: (
         float  # wall-clock time of last write (active stream mtime); 0.0 if no segment
     )
-    next_byte: int  # lifetime byte cursor — agents resume with `tail -c +<next_byte>`
+    # 1-based lifetime position of the next unread byte; agents resume with
+    # `tail -c +<next_byte>` (GNU-style inclusive start).
+    next_byte: int
     dropped: int  # k lines dropped (gap)
     first_line: int  # retention floor: first n still fully on disk (0 if no full lines)
     partial_bytes: int  # k bytes in partial-line tail
@@ -248,31 +267,26 @@ def first_byte_of(session_dir: Path) -> int:
     return start if start is not None else 0
 
 
-def next_byte_of(session_dir: Path) -> int:
-    """Lifetime byte cursor at the session tip (partial-line bytes included).
-    `tail -c +K` resumes from lifetime offset K."""
-    segs = list_segments(session_dir)
-    if not segs:
-        return 0
-    return segment_tip_byte(
-        session_dir / idx_name(segs[-1]),
-        session_dir / stream_name(segs[-1]),
-    )
-
-
-def _partial_fields(view: StreamView, last_time: float) -> tuple[int, float]:
-    """(partial_bytes, partial_age) for reporting; zeros when no tail."""
-    if view.partial_len and last_time > 0.0:
-        return view.partial_len, max(0.0, time.time() - last_time)
+def _partial_fields(
+    view: StreamView, last_time: float, start: int, end: int
+) -> tuple[int, float]:
+    """(partial_bytes, partial_age) for the unterminated bytes inside the
+    emitted [start, end) window; zeros when none were emitted."""
+    k = min(end, view.tip) - max(start, view.last_end)
+    if k > 0 and last_time > 0.0:
+        return k, max(0.0, time.time() - last_time)
     return 0, 0.0
 
 
 def _floor_check(
-    view: StreamView, from_line: int, effective_from: int, start: int, out: bytes
+    view: StreamView, requested_from: int, start: int, out: bytes
 ) -> tuple[int, int, list[str]]:
-    """One gap notice for everything retention dropped below the cursor:
-    whole lines, plus the head of the first emitted line when stdout starts
-    at the floor. Returns (dropped_lines, dropped_first_bytes, stderr_lines)."""
+    """One gap notice for what retention dropped out of the REQUESTED range:
+    whole lines below the floor, plus the head of the first emitted line when
+    stdout starts at the floor. A request fully satisfied from retained data
+    gets no notice. Returns (dropped_lines, dropped_first_bytes, stderr_lines).
+    Byte positions in the notice are 1-based, matching `tail -c +K`."""
+    effective_from = max(requested_from, 1)
     first_line = view.first_line
     j = first_line - effective_from if first_line and effective_from < first_line else 0
     k = view.truncated_head if out and start == view.base else 0
@@ -282,15 +296,15 @@ def _floor_check(
     if j and k:
         msg = (
             f"dropped {j} lines + {k} bytes"
-            f" (from-line={from_line}, first-line={first_line},"
-            f" from-byte={view.line_start}, first-byte={view.base})"
+            f" (from-line={effective_from}, first-line={first_line},"
+            f" from-byte={view.line_start + 1}, first-byte={view.base + 1})"
         )
     elif j:
-        msg = f"dropped {j} lines (from-line={from_line}, first-line={first_line})"
+        msg = f"dropped {j} lines (from-line={effective_from}, first-line={first_line})"
     elif k:
         msg = (
             f"dropped {k} bytes"
-            f" (from-byte={view.line_start}, first-byte={view.base})"
+            f" (from-byte={view.line_start + 1}, first-byte={view.base + 1})"
         )
     else:
         return 0, 0, []
@@ -302,27 +316,31 @@ def lines_since(
     *,
     from_line: int,
 ) -> ReadResult:
-    """Read lines with n >= from_line (Unix `tail -n +N` semantics). Includes
-    any partial-line tail in stdout. Emitting from the floor includes the
-    retained suffix of a head-truncated line; the `dropped` notice covers it."""
+    """Read lines with n >= from_line (Unix `tail -n +N` semantics). The
+    unterminated tail counts as line `last_line + 1`: it is emitted only when
+    the cursor covers it, so a cursor past the stream emits nothing. Emitting
+    from the floor includes the retained suffix of a head-truncated line; the
+    `dropped` notice covers it."""
     view = load_stream_view(session_dir)
     last_time = last_time_of(session_dir)
 
     # Line numbers are 1-indexed; treat from_line<1 as "from the start" with no gap.
     effective_from = max(from_line, 1)
 
+    include_partial = view.partial_len > 0 and effective_from <= view.last_line + 1
     if view.records and effective_from <= view.last_line:
         start = view.start_of(max(effective_from, view.records[0][0]))
+        end = view.tip if include_partial else view.last_end
+    elif include_partial:
+        start, end = view.last_end, view.tip  # caught up at the open line
     else:
-        start = view.last_end  # caught up (or no records): partial tail only
-    out = view.slice(start, view.tip)
-    dropped, head_dropped, stderr_lines = _floor_check(
-        view, from_line, effective_from, start, out
-    )
+        start = end = view.tip  # cursor ahead of the stream
+    out = view.slice(start, end)
+    dropped, head_dropped, stderr_lines = _floor_check(view, effective_from, start, out)
 
     first_line = view.first_line
     emit_from = max(effective_from, first_line) if first_line else 0
-    partial_bytes, partial_age = _partial_fields(view, last_time)
+    partial_bytes, partial_age = _partial_fields(view, last_time, start, end)
 
     return ReadResult(
         stdout=out,
@@ -330,12 +348,12 @@ def lines_since(
         first_emitted=emit_from,
         last_line=view.last_line,
         last_time=last_time,
-        next_byte=view.tip,
+        next_byte=view.tip + 1,
         dropped=dropped,
         first_line=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
-        emitted_byte=view.tip,
+        emitted_byte=end,
         dropped_first_bytes=head_dropped,
     )
 
@@ -362,20 +380,16 @@ def lines_since_time(session_dir: Path, *, from_time: float) -> ReadResult:
         start = view.last_end
     out = view.slice(start, end)
     # Time cursors carry no line gap; only the head-drop clause can apply.
-    _, head_dropped, trunc_lines = _floor_check(
-        view, 0, view.first_line, start, out
-    )
+    _, head_dropped, trunc_lines = _floor_check(view, view.first_line, start, out)
 
-    partial_bytes, partial_age = (
-        _partial_fields(view, last_time) if include_partial else (0, 0.0)
-    )
+    partial_bytes, partial_age = _partial_fields(view, last_time, start, end)
     return ReadResult(
         stdout=out,
         stderr_lines=trunc_lines,
         first_emitted=0,
         last_line=view.last_line,
         last_time=last_time,
-        next_byte=view.tip,
+        next_byte=view.tip + 1,
         dropped=0,
         first_line=view.first_line,
         partial_bytes=partial_bytes,
@@ -386,9 +400,12 @@ def lines_since_time(session_dir: Path, *, from_time: float) -> ReadResult:
 
 
 def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
-    """Read full lines whose idx timestamp `t <= until_t`. Partial tail and
-    any head-truncated fragment excluded (head semantics)."""
+    """Read full lines whose idx timestamp `t <= until_t`. The unterminated
+    tail is included only when the whole stream is older than `until_t`
+    (its newest write, `last_time`, is the open line's effective timestamp).
+    Head-truncated fragments are excluded (head semantics)."""
     view = load_stream_view(session_dir)
+    last_time = last_time_of(session_dir)
     first_line = view.first_line
 
     last_n = 0
@@ -398,27 +415,31 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
             last_n = view.records[i][0]
             i += 1
 
+    include_partial = (
+        view.partial_len > 0 and 0.0 < last_time <= until_t and last_n == view.last_line
+    )
     if last_n:
         start = view.start_of(first_line)
-        end = view.end_of(last_n)
-        out = view.slice(start, end)
-        next_byte = end
+        end = view.tip if include_partial else view.end_of(last_n)
+    elif include_partial:  # no complete lines retained; just the open line
+        start, end = view.last_end, view.tip
     else:
-        out = b""
-        next_byte = view.base
+        start = end = view.base
+    out = view.slice(start, end)
 
+    partial_bytes, partial_age = _partial_fields(view, last_time, start, end)
     return ReadResult(
         stdout=out,
         stderr_lines=[],
         first_emitted=first_line if out else 0,
         last_line=last_n,
-        last_time=last_time_of(session_dir),
-        next_byte=next_byte,
+        last_time=last_time,
+        next_byte=end + 1,
         dropped=0,
         first_line=first_line,
-        partial_bytes=0,
-        partial_age=0.0,
-        emitted_byte=next_byte,
+        partial_bytes=partial_bytes,
+        partial_age=partial_age,
+        emitted_byte=end,
     )
 
 
@@ -433,12 +454,13 @@ def _full_line_span(view: StreamView, first: int, count: int) -> tuple[int, int]
 def head_first(
     session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
 ) -> ReadResult:
-    """Head the first N lines or first K bytes (excluding partial tail).
+    """Head the first N lines or first K bytes (GNU semantics).
 
-    `-n` counts full lines (a head-truncated fragment is not a countable
-    line); `-c` is byte-oriented and starts at the retention floor. Default
-    N=10 to match Unix `head`. `last_line` is the last fully-emitted line;
-    `tail -vn +<L+1>` resumes from there.
+    `-n` counts the unterminated tail as a line: it is emitted only when N
+    exceeds the retained full lines. `-c` counts bytes from the retention
+    floor to the true stream end. Default N=10 to match Unix `head`.
+    `last_line` is the last fully-emitted line; `tail -vn +<L+1>` resumes
+    from there.
     """
     return _head(session_dir, n_lines=n_lines, c_bytes=c_bytes, drop_last=False)
 
@@ -446,8 +468,9 @@ def head_first(
 def head_drop_last(
     session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
 ) -> ReadResult:
-    """GNU `head -n -K` / `-c -K`: emit everything except the last K lines (or
-    K bytes). Partial-line tail excluded."""
+    """GNU `head -n -K` / `-c -K`: emit everything except the last K lines
+    (the unterminated tail counts as the newest line) or the last K bytes
+    (counted from the true stream end)."""
     return _head(session_dir, n_lines=n_lines, c_bytes=c_bytes, drop_last=True)
 
 
@@ -458,19 +481,20 @@ def _head(
     c_bytes: int | None,
     drop_last: bool,
 ) -> ReadResult:
-    """Emit full lines (or bytes) from the floor; `drop_last` flips the end
+    """Emit lines (or bytes) from the floor; `drop_last` flips the end
     of the range from "first K" to "all but the last K"."""
     view = load_stream_view(session_dir)
     last_time = last_time_of(session_dir)
     first_line = view.first_line
     available = view.last_line - first_line + 1 if first_line else 0
+    pad = 1 if view.partial_len > 0 else 0  # the open line occupies a slot
 
     if c_bytes is not None:
         k = max(c_bytes, 0)
         if drop_last:
-            end = max(view.last_end - k, view.base)
+            end = max(view.tip - k, view.base)
         else:
-            end = min(view.base + k, view.last_end)
+            end = min(view.base + k, view.tip)
         start = view.base
         body = view.slice(start, end)
         # Last full line wholly inside the body.
@@ -480,33 +504,38 @@ def _head(
             while n <= view.last_line and view.end_of(n) <= end:
                 last_line = n
                 n += 1
-        next_byte = view.base + len(body)
     else:
         if drop_last:
-            emitted = max(available - (n_lines or 0), 0)
+            emitted = max(available + pad - (n_lines or 0), 0)
         else:
             keep = 10 if n_lines is None else n_lines
-            emitted = min(max(keep, 0), available)
+            emitted = min(max(keep, 0), available + pad)
+        include_partial = emitted > available  # range covers the open line
+        complete = min(emitted, available)
         start, end = (
-            _full_line_span(view, first_line, emitted) if first_line else (view.base, view.base)
+            _full_line_span(view, first_line, complete)
+            if first_line
+            else (view.base, view.base)
         )
+        if include_partial:
+            end = view.tip
         body = view.slice(start, end)
-        last_line = first_line + emitted - 1 if (first_line and emitted) else 0
-        next_byte = end
-    dropped, head_dropped, stderr_lines = _floor_check(view, 0, 1, start, body)
+        last_line = first_line + complete - 1 if (first_line and complete) else 0
+    dropped, head_dropped, stderr_lines = _floor_check(view, 1, start, body)
 
+    partial_bytes, partial_age = _partial_fields(view, last_time, start, end)
     return ReadResult(
         stdout=body,
         stderr_lines=stderr_lines,
         first_emitted=first_line if last_line else 0,
         last_line=last_line,
         last_time=last_time,
-        next_byte=next_byte,
+        next_byte=end + 1,
         dropped=dropped,
         first_line=first_line,
-        partial_bytes=0,
-        partial_age=0.0,
-        emitted_byte=next_byte,
+        partial_bytes=partial_bytes,
+        partial_age=partial_age,
+        emitted_byte=end,
         dropped_first_bytes=head_dropped,
     )
 
@@ -514,36 +543,57 @@ def _head(
 def tail_last(
     session_dir: Path, *, n_lines: int | None = None, c_bytes: int | None = None
 ) -> ReadResult:
-    """Tail the last N lines or last K bytes of stream content (the partial
-    tail rides along either way). N exceeding the retained full lines emits
-    everything, head-truncated fragment included."""
+    """Tail the last N lines or last K bytes (GNU semantics).
+
+    `-c K` is exactly the last K bytes of the stream, counted from the true
+    end (unterminated tail included). `-n N` counts the unterminated tail as
+    the newest line; N exceeding the retained lines emits everything,
+    head-truncated fragment included."""
     view = load_stream_view(session_dir)
     last_time = last_time_of(session_dir)
     first_line = view.first_line
     available = view.last_line - first_line + 1 if first_line else 0
 
+    dropped = 0
+    head_dropped = 0
+    stderr_lines: list[str] = []
+    req_first = 0
     if c_bytes is not None:
-        start = max(view.last_end - max(c_bytes, 0), view.base)
+        k = max(c_bytes, 0)
+        start = max(view.tip - k, view.base)
+        if view.tip - k < view.base and k <= view.tip:
+            # The requested window dips below the retention floor.
+            head_dropped = view.base - (view.tip - k)
+            stderr_lines.append(
+                f"dropped {head_dropped} bytes"
+                f" (from-byte={view.tip - k + 1}, first-byte={view.base + 1})"
+            )
     else:
         keep = 10 if n_lines is None else n_lines
+        # The unterminated tail occupies the newest slot.
+        complete = max(keep - 1, 0) if view.partial_len > 0 else keep
+        req_first = view.last_line - complete + 1
         if keep <= 0:
-            start = view.last_end
-        elif keep > available:
+            start = view.tip
+        elif complete > available:
             start = view.base
+        elif complete <= 0:
+            start = view.last_end
         else:
-            start = view.start_of(view.last_line - keep + 1)
+            start = view.start_of(req_first)
     out = view.slice(start, view.tip)
-    dropped, head_dropped, stderr_lines = _floor_check(view, 0, 1, start, out)
+    if c_bytes is None:
+        dropped, head_dropped, stderr_lines = _floor_check(view, req_first, start, out)
 
     emit_from = max(first_line, 1) if first_line else 0
-    partial_bytes, partial_age = _partial_fields(view, last_time)
+    partial_bytes, partial_age = _partial_fields(view, last_time, start, view.tip)
     return ReadResult(
         stdout=out,
         stderr_lines=stderr_lines,
         first_emitted=emit_from,
         last_line=view.last_line,
         last_time=last_time,
-        next_byte=view.tip,
+        next_byte=view.tip + 1,
         dropped=dropped,
         first_line=first_line,
         partial_bytes=partial_bytes,
@@ -554,33 +604,39 @@ def tail_last(
 
 
 def bytes_since(session_dir: Path, *, from_byte: int) -> ReadResult:
-    """Read bytes after lifetime offset `from_byte` (tail -c +K). May start
-    mid-line; partial-line bytes are included.
+    """Read bytes from 1-based lifetime position `from_byte` (GNU `tail -c
+    +K`; `+1` and `+0` both mean everything). May start mid-line;
+    partial-line bytes are included.
 
-    If `from_byte` points below the retention floor (retention dropped that
+    If the position lies below the retention floor (retention dropped that
     range), emits a `dropped <K> bytes (from-byte=<B>, first-byte=<F>)` extra
     and starts at the floor.
     """
+    offset = max(from_byte - 1, 0)  # 1-based position -> lifetime offset
+    # Full load (no from_byte): the trailer's line metadata must reflect the
+    # whole session, not just records past the cursor.
     view = load_stream_view(session_dir)
     last_time = last_time_of(session_dir)
 
     stderr_lines: list[str] = []
     dropped = 0
-    if from_byte < view.base:
-        dropped = view.base - from_byte
+    if offset < view.base:
+        dropped = view.base - offset
         stderr_lines.append(
-            f"dropped {dropped} bytes (from-byte={from_byte}, first-byte={view.base})"
+            f"dropped {dropped} bytes"
+            f" (from-byte={offset + 1}, first-byte={view.base + 1})"
         )
-    out = view.slice(max(from_byte, view.base), view.tip)
+    start = max(offset, view.base)
+    out = view.slice(start, view.tip)
 
-    partial_bytes, partial_age = _partial_fields(view, last_time)
+    partial_bytes, partial_age = _partial_fields(view, last_time, start, view.tip)
     return ReadResult(
         stdout=out,
         stderr_lines=stderr_lines,
         first_emitted=0,
         last_line=view.last_line,
         last_time=last_time,
-        next_byte=view.tip,
+        next_byte=view.tip + 1,
         dropped=dropped,
         first_line=view.first_line,
         partial_bytes=partial_bytes,

@@ -157,7 +157,7 @@ def test_single_oversized_line_is_capped(project: Path, run_live) -> None:
     # The line started at lifetime 0, so the truncated head is exactly the
     # retention floor: total written (5000 x's + CRLF) minus retained bytes.
     dropped = 5002 - _retained_stream_bytes(project)
-    assert f"dropped {dropped} bytes (from-byte=0" in out.stderr
+    assert f"dropped {dropped} bytes (from-byte=1" in out.stderr
 
 
 def test_no_newline_output_is_capped(project: Path, run_live) -> None:
@@ -189,7 +189,7 @@ def test_no_newline_output_is_capped(project: Path, run_live) -> None:
     # No record exists yet, but the idx header's open-line offset still lets
     # readers report exactly how much of the unfinished line is gone.
     dropped = 5000 - _retained_stream_bytes(project)
-    assert f"dropped {dropped} bytes (from-byte=0" in out.stderr
+    assert f"dropped {dropped} bytes (from-byte=1" in out.stderr
     assert "partial-line" in out.stderr
 
 
