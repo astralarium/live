@@ -31,14 +31,9 @@ from .ansi import (
     to_base16,
 )
 from .config import Config
-from .format import LOCK_NAME, idx_name, list_segments, read_idx_records
+from .format import LOCK_NAME, idx_name, list_segments
 from .lock import probe_held
-from .reader import (
-    cat_all,
-    lines_in_segment,
-    segment_refs,
-    stream_segment_bytes,
-)
+from .reader import cat_all, load_stream_view
 from .session import SessionInfo, session_info
 from .watcher import new_watcher
 
@@ -49,9 +44,9 @@ from .watcher import new_watcher
 class Line:
     """One recorded line. `text` includes its trailing newline.
 
-    `end_byte` is the cumulative on-disk byte offset through the end of this
-    line, used by the pager status bar to show byte position within the
-    rendered view.
+    `end_byte` is the lifetime byte offset just past the end of this line,
+    used by the pager status bar to show byte position within the rendered
+    view (and matching `tail -c` cursors).
     """
 
     text: bytes
@@ -64,59 +59,36 @@ class Line:
 class _ScanCursor:
     """Walk position shared between the initial snapshot and incremental drains.
 
-    Tracks the segment number last scanned, how many completed lines were
-    consumed from it, and the cumulative byte count through those lines. The
-    drain thread keeps one of these; advancing it lets the next call skip every
-    segment before `seg` and resume mid-way through `seg` itself.
+    `next_n` is the next line number to consume; `next_byte` is the lifetime
+    offset where that line starts. Advancing it lets the next call skip every
+    segment wholly below `next_byte`.
     """
 
-    seg: int | None = None
-    records_in_seg: int = 0
-    total_bytes: int = 0
+    next_n: int = 0
+    next_byte: int = 0
 
 
 def _scan_from(session_dir: Path, cursor: _ScanCursor) -> list[Line]:
-    """Walk segments forward from `cursor`, return new Lines, advance `cursor`.
+    """Return new complete Lines past `cursor`, advancing `cursor`.
 
-    Segments numbered below `cursor.seg` are skipped — they were drained on a
-    previous call. If `cursor.seg` is no longer present (unexpected rotation
-    or pruning), the cursor resets and the scan restarts from segment 0.
+    Lines are sliced by idx byte offsets, so a line spanning segments comes
+    back whole; one whose head was retained away between drains comes back
+    truncated rather than dropped.
     """
-    refs = segment_refs(session_dir)
-    if not refs:
-        return []
-    if cursor.seg is None:
-        start_idx = 0
-    else:
-        start_idx = next(
-            (i for i, r in enumerate(refs) if r.seg == cursor.seg), None
-        )
-        if start_idx is None:
-            cursor.seg = None
-            cursor.records_in_seg = 0
-            cursor.total_bytes = 0
-            start_idx = 0
-
+    view = load_stream_view(session_dir, from_byte=cursor.next_byte)
     out: list[Line] = []
-    cumulative = cursor.total_bytes
-    for i in range(start_idx, len(refs)):
-        ref = refs[i]
-        records = read_idx_records(ref.idx_path)
-        stream = stream_segment_bytes(ref.stream_path)
-        chunks = lines_in_segment(stream, records)
-        skip = cursor.records_in_seg if ref.seg == cursor.seg else 0
-        consumed = skip
-        for j in range(skip, len(records)):
-            if j >= len(chunks):
-                break
-            n, t, _b = records[j]
-            text = chunks[j]
-            cumulative += len(text)
-            out.append(Line(text=text, n=n, t=t, end_byte=cumulative))
-            consumed = j + 1
-        cursor.seg = ref.seg
-        cursor.records_in_seg = consumed
-    cursor.total_bytes = cumulative
+    for i, (n, t, b) in enumerate(view.records):
+        if cursor.next_n and n < cursor.next_n:
+            continue
+        if i + 1 < len(view.records):
+            end = view.records[i + 1][2]
+        else:
+            end = view.last_end
+        out.append(
+            Line(text=view.slice(max(b, view.base), end), n=n, t=t, end_byte=end)
+        )
+        cursor.next_n = n + 1
+        cursor.next_byte = end
     return out
 
 
@@ -782,8 +754,8 @@ class PagerSource:
     def _drain_new_lines(self) -> None:
         """Push newly indexed lines onto the queue, resuming where we left off.
 
-        Cost is O(active-segment bytes + new lines) per wakeup — old segments
-        before `self._scan.seg` are not re-read.
+        Cost is O(bytes past the scan cursor) per wakeup — segments wholly
+        below `self._scan.next_byte` are not re-read.
         """
         emitted = False
         for line in _scan_from(self.session_dir, self._scan):

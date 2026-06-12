@@ -62,7 +62,7 @@ def test_heartbeat_advances_idx_mtime_while_silent(
     spawn_run("-n", "beat")
     sess_dir = wait_for_session()
     idx = sess_dir / "lines.0000.idx"
-    assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+    assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40,
                     timeout=5.0), "no indexed line ever appeared"
     t0 = idx.stat().st_mtime
     time.sleep(2.5)

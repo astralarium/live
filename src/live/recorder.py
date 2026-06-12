@@ -3,6 +3,11 @@
 Holds the sole writer flock on `process.lock` for the session's lifetime.
 Stream is always one complete line ahead of the index (prefix invariant);
 heartbeat touches the active idx mtime to surface `hung` vs silent.
+
+Rotation happens at exactly `segment_bytes`, mid-line if that's where the
+budget lands — a line may span segments, and pending-line state survives
+rotation. `maxKb` is a hard cap: retention runs on every rotation and is
+never blocked by an unterminated line.
 """
 
 from __future__ import annotations
@@ -86,6 +91,9 @@ class _Recorder:
         self.master_fd: int = -1
         self.child_pid: int = -1
 
+        # Cap wins: a segment budget above maxKb would void the retention bound.
+        self.segment_bytes: int = min(cfg.segment_bytes, cfg.max_bytes)
+
         self.active_seg: int = 0
         self.stream_fd: int = -1
         self.idx_fd: int = -1
@@ -132,12 +140,19 @@ class _Recorder:
         self.idx_fd = os.open(str(idx_path), flags, 0o600)
         self.active_seg = seg
         self.stream_bytes = os.fstat(self.stream_fd).st_size
-        # Write segment-start header on first open of a fresh idx.
+        # Write the header on first open of a fresh idx: segment start, plus
+        # where the line open at that point began (lets readers report how
+        # many bytes of a head-truncated line retention dropped).
         if os.fstat(self.idx_fd).st_size == 0:
-            self._write_all(self.idx_fd, IDX_HEADER.pack(self.lifetime_bytes))
-        self.pending_line_start = None
-        self.pending_line_start_byte = None
-        self.pending_line_bytes = 0
+            line_start = (
+                self.pending_line_start_byte
+                if self.pending_line_bytes and self.pending_line_start_byte is not None
+                else self.lifetime_bytes
+            )
+            self._write_all(
+                self.idx_fd, IDX_HEADER.pack(self.lifetime_bytes, line_start)
+            )
+        # pending_line_* is NOT reset: a partial line spans rotation.
         self.last_idx_touch = time.time()
 
     # ----- fork & PTY -----
@@ -393,24 +408,33 @@ class _Recorder:
     # ----- record / index -----
 
     def _record_chunk(self, chunk: bytes) -> None:
-        """Append bytes to active stream segment, index any completed lines."""
-        if not chunk:
-            return
+        """Append bytes to the active stream segment, index any completed
+        lines. Splits at the segment budget and rotates unconditionally —
+        mid-line if that's where the budget lands — so closed segments are
+        exactly `segment_bytes` and retention is never blocked by an
+        unterminated line."""
+        while chunk:
+            budget = self.segment_bytes - self.stream_bytes
+            piece, chunk = chunk[:budget], chunk[budget:]
+            self._record_piece(piece)
+            if self.stream_bytes >= self.segment_bytes:
+                self._rotate()
 
+    def _record_piece(self, piece: bytes) -> None:
         # Write stream first (prefix invariant).
-        chunk_start_lifetime = self.lifetime_bytes
-        self._write_all(self.stream_fd, chunk)
-        self.stream_bytes += len(chunk)
-        self.lifetime_bytes += len(chunk)
+        piece_start_lifetime = self.lifetime_bytes
+        self._write_all(self.stream_fd, piece)
+        self.stream_bytes += len(piece)
+        self.lifetime_bytes += len(piece)
         start = 0
         while True:
-            nl = chunk.find(b"\n", start)
+            nl = piece.find(b"\n", start)
             if nl < 0:
-                if start < len(chunk):
+                if start < len(piece):
                     if self.pending_line_start is None:
                         self.pending_line_start = time.time()
-                        self.pending_line_start_byte = chunk_start_lifetime + start
-                    self.pending_line_bytes += len(chunk) - start
+                        self.pending_line_start_byte = piece_start_lifetime + start
+                    self.pending_line_bytes += len(piece) - start
                 break
             # `t` / `byte_offset` for this line = timestamp / lifetime byte of its first byte.
             t = (
@@ -421,7 +445,7 @@ class _Recorder:
             line_start_byte = (
                 self.pending_line_start_byte
                 if self.pending_line_start_byte is not None
-                else chunk_start_lifetime + start
+                else piece_start_lifetime + start
             )
             self.line_counter += 1
             n = self.line_counter
@@ -435,10 +459,6 @@ class _Recorder:
             self.pending_line_bytes = 0
             start = nl + 1
 
-        # Rotation check: only at line boundary (no pending partial bytes).
-        if self.pending_line_bytes == 0 and self.stream_bytes >= self.cfg.segment_bytes:
-            self._rotate()
-
     def _write_all(self, fd: int, data: bytes) -> None:
         view = memoryview(data)
         n = 0
@@ -451,10 +471,13 @@ class _Recorder:
         self._retain()
 
     def _retain(self) -> None:
+        """Drop lowest-numbered segments while over the cap. The active
+        segment and the newest closed one are always kept: the newest closed
+        idx holds the latest line records (watermarks must never regress),
+        and since closed segments are at most `segment_bytes <= max_bytes`,
+        retention is hard-bounded at `max_bytes + segment_bytes`."""
         max_bytes = self.cfg.max_bytes
         segs = list_segments(self.dir)
-        if not segs:
-            return
         total = 0
         sizes: dict[int, int] = {}
         for s in segs:
@@ -463,20 +486,17 @@ class _Recorder:
             except FileNotFoundError:
                 sizes[s] = 0
             total += sizes[s]
-        # Drop lowest-numbered while over the cap, but never the active segment.
-        for s in segs:
+        # Only called from _rotate, so segs[-1] is the active segment and
+        # segs[-2] the newest closed one.
+        for s in segs[:-2]:
             if total <= max_bytes:
                 break
-            if s == self.active_seg:
-                break
-            sp = self.dir / stream_name(s)
-            ip = self.dir / idx_name(s)
             try:
-                os.unlink(sp)
+                os.unlink(self.dir / stream_name(s))
             except FileNotFoundError:
                 pass
             try:
-                os.unlink(ip)
+                os.unlink(self.dir / idx_name(s))
             except FileNotFoundError:
                 pass
             total -= sizes.get(s, 0)

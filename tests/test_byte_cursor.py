@@ -118,7 +118,7 @@ def test_bytes_since_reports_partial_line(
                 i = idx.read_bytes()
             except FileNotFoundError:
                 return False
-            return len(i) == 32 and b"partial prompt >" in s and not s.endswith(b"\n")
+            return len(i) == 40 and b"partial prompt >" in s and not s.endswith(b"\n")
 
         assert wait_for(has_partial, timeout=8.0), "partial state never appeared"
 

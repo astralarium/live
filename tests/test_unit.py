@@ -10,8 +10,7 @@ import pytest
 
 from live.format import IDX_RECORD, Meta, Watermarks, count_complete_lines, idx_record_count
 from live.reader import (
-    lines_in_segment,
-    partial_tail_bytes,
+    StreamView,
     should_strip_ansi,
 )
 from live.session import (
@@ -52,32 +51,77 @@ def test_should_strip_ansi_matrix(
     )
 
 
-# ----- lines_in_segment / partial_tail_bytes -----
+# ----- StreamView extent math -----
 
 
-def _records(n: int) -> list[tuple[int, float, int]]:
-    """Stand-in idx records: only line numbers matter for these helpers."""
-    return [(i + 1, 0.0, 0) for i in range(n)]
+def _view(
+    data: bytes,
+    records: list[tuple[int, float, int]],
+    base: int = 0,
+    line_start: int | None = None,
+) -> StreamView:
+    """Build a view the way load_stream_view does: last_end = just past the
+    last indexed line's newline."""
+    if records:
+        nl = data.find(b"\n", max(records[-1][2] - base, 0))
+        last_end = base + nl + 1
+    else:
+        last_end = base
+    return StreamView(
+        base=base,
+        data=data,
+        records=records,
+        last_end=last_end,
+        line_start=base if line_start is None else line_start,
+    )
 
 
-def test_lines_in_segment_splits_on_newlines() -> None:
-    stream = b"alpha\nbravo\ncharlie\n"
-    assert lines_in_segment(stream, _records(3)) == [b"alpha\n", b"bravo\n", b"charlie\n"]
+def test_stream_view_extents_split_on_record_offsets() -> None:
+    data = b"alpha\nbravo\ncharlie\n"
+    recs = [(1, 0.0, 0), (2, 0.0, 6), (3, 0.0, 12)]
+    v = _view(data, recs)
+    assert [v.slice(v.start_of(n), v.end_of(n)) for n in (1, 2, 3)] == [
+        b"alpha\n",
+        b"bravo\n",
+        b"charlie\n",
+    ]
+    assert v.partial_len == 0
 
 
-def test_lines_in_segment_returns_empty_when_no_records() -> None:
-    assert lines_in_segment(b"some text\n", []) == []
-
-
-def test_partial_tail_bytes_returns_unindexed_trailing() -> None:
+def test_stream_view_partial_tail_after_last_record() -> None:
     # 2 complete lines, then a partial "downloading 50%" (no \n)
-    stream = b"alpha\nbravo\ndownloading 50%"
-    assert partial_tail_bytes(stream, _records(2)) == b"downloading 50%"
+    data = b"alpha\nbravo\ndownloading 50%"
+    v = _view(data, [(1, 0.0, 0), (2, 0.0, 6)])
+    assert v.slice(v.last_end, v.tip) == b"downloading 50%"
+    assert v.partial_len == 15
 
 
-def test_partial_tail_bytes_empty_when_all_indexed() -> None:
-    stream = b"alpha\nbravo\n"
-    assert partial_tail_bytes(stream, _records(2)) == b""
+def test_stream_view_no_records_is_all_partial() -> None:
+    v = _view(b"some text\n", [])
+    assert v.first_line == 0
+    assert v.last_line == 0
+    assert v.slice(v.last_end, v.tip) == b"some text\n"
+
+
+def test_stream_view_head_truncated_first_record() -> None:
+    # Line 5's head was retained away (b=90 < base=100); line 6 is full.
+    data = b"tail-of-5\nline-6\n"
+    v = _view(data, [(5, 0.0, 90), (6, 0.0, 110)], base=100, line_start=90)
+    assert v.first_line == 6
+    assert v.last_line == 6
+    assert v.truncated_head == 10
+    # The truncated record still slices to its retained suffix.
+    assert v.slice(v.start_of(5), v.end_of(5)) == b"tail-of-5\n"
+    assert v.slice(v.start_of(6), v.end_of(6)) == b"line-6\n"
+
+
+def test_stream_view_line_spanning_offsets() -> None:
+    # One line larger than any segment: extents are pure offset math, so a
+    # spanning line is whole as long as its bytes are retained.
+    body = b"x" * 100 + b"\n" + b"y\n"
+    v = _view(body, [(1, 0.0, 0), (2, 0.0, 101)])
+    assert v.slice(v.start_of(1), v.end_of(1)) == b"x" * 100 + b"\n"
+    assert v.slice(v.start_of(2), v.end_of(2)) == b"y\n"
 
 
 # ----- format helpers -----
@@ -132,7 +176,7 @@ def test_count_complete_lines_ignores_partial_tail(tmp_path) -> None:
 
 def test_idx_record_count(tmp_path) -> None:
     p = tmp_path / "lines.0000.idx"
-    p.write_bytes(b"\x00" * (8 + 3 * 24))  # 8-byte header + 3 records
+    p.write_bytes(b"\x00" * (16 + 3 * 24))  # 16-byte header + 3 records
     assert idx_record_count(p) == 3
 
 

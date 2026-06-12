@@ -34,7 +34,7 @@ def test_follow_streams_lines_as_they_arrive(project: Path, live_env, wait_for) 
         # Wait until at least one line is indexed so we have something to follow.
         [sess] = list(sessions.iterdir())
         idx = sess / "lines.0000.idx"
-        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40,
                         timeout=5.0)
 
         # Start the follower; should pick up subsequent lines and exit when recorder does.
@@ -91,7 +91,7 @@ def test_follow_does_not_duplicate_partial_line(project: Path, live_env, wait_fo
         assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
         [sess] = list(sessions.iterdir())
         idx = sess / "lines.0000.idx"
-        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40,
                         timeout=5.0)
 
         follower = subprocess.Popen(
@@ -135,7 +135,7 @@ def test_follow_clean_exit_on_sigint(project: Path, live_env, wait_for) -> None:
         assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
         [sess] = list(sessions.iterdir())
         idx = sess / "lines.0000.idx"
-        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 16,
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40,
                         timeout=5.0)
 
         follower = subprocess.Popen(
@@ -165,3 +165,60 @@ def test_follow_clean_exit_on_sigint(project: Path, live_env, wait_for) -> None:
             except subprocess.TimeoutExpired:
                 rec.kill()
                 rec.wait(timeout=5)
+
+
+def test_follow_streams_line_spanning_rotation(project: Path, live_env, wait_for) -> None:
+    # segmentKb=1 forces mid-line rotation: the 3000-char line spans ~3
+    # segments while the follower is attached. The byte cursor must stream
+    # it whole, with no duplication or loss across segment hops.
+    import json as _json
+
+    (project / ".live").mkdir(mode=0o700, exist_ok=True)
+    (project / ".live" / "config.json").write_text(
+        _json.dumps({"segmentKb": 1, "maxKb": 64})
+    )
+    script = (
+        "echo lead-in; "
+        "sleep 1.0; "
+        "awk 'BEGIN { for (i = 0; i < 3000; i++) printf \"z\"; print \"\" }'; "
+        "sleep 0.3"
+    )
+    rec = subprocess.Popen(
+        [sys.executable, "-m", "live.cli", "run", "-n", "spanf", "--",
+         "sh", "-c", script],
+        cwd=str(project),
+        env=live_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        sessions = project / ".live" / "sessions"
+        assert wait_for(lambda: sessions.exists() and any(sessions.iterdir()))
+        [sess] = list(sessions.iterdir())
+        idx = sess / "lines.0000.idx"
+        assert wait_for(lambda: idx.exists() and idx.stat().st_size >= 40,
+                        timeout=5.0)
+
+        follower = subprocess.Popen(
+            [sys.executable, "-m", "live.cli", "tail", "-f", "spanf"],
+            cwd=str(project),
+            env=live_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            stdout, stderr = follower.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            follower.kill()
+            stdout, stderr = follower.communicate()
+            pytest.fail("follower did not exit when recorder finished")
+
+        body = stdout.replace("\r", "")
+        assert "z" * 3000 + "\n" in body, f"spanning line mangled: {body[-100:]!r}"
+        assert body.count("z") == 3000  # no duplicated bytes across rotations
+        assert "exit-code=0" in stderr
+    finally:
+        if rec.poll() is None:
+            rec.kill()
+            rec.wait(timeout=5)

@@ -377,9 +377,7 @@ def cmd_tail(args) -> int:
         return follow_session(
             cfg=cfg,
             info=info,
-            initial_cursor=result.last_line,
-            initial_partial_bytes=result.partial_bytes,
-            initial_partial_seg=result.partial_seg,
+            initial_byte=result.emitted_byte,
             strip=strip,
         )
 
@@ -583,12 +581,16 @@ Read output:
 stdout: merged stdout+stderr logs
 
 stderr: `live` verbose output (-v):
-- trailer: "live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>"
-- stop: "live: exit-code=" or "live: exit=inconsistent"
-- hung: "live: status=hung last-activity=<s>" (alive, but stalled)
-- gap (lines): "live: dropped <k> lines (from-line=<N>, first-line=<F>)"
-- gap (bytes): "live: dropped <k> bytes (from-byte=<B>, first-byte=<F>)"
-- partial: "live: partial-line bytes=<k> age=<s>"
+- trailer:
+  "live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>"
+- stop: session is done
+  "live: exit-code=<code>" or "live: exit=inconsistent"
+- hung: alive, but stalled
+  "live: status=hung last-activity=<s>"
+- gap: rotation dropped data
+  "live: dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)"
+- partial: partial line (eg. progress bar)
+  "live: partial-line bytes=<k> age=<s>"
 
 Check for new data:
   live tail -vn +<N> <SELECTOR>  # by line

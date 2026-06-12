@@ -1,9 +1,16 @@
 """On-disk format helpers: meta.json, idx records, segment enumeration.
 
-Index format: 8-byte header (`>Q` lifetime byte offset of segment start), then
-append-only 24-byte records (`>Qdq` line number / timestamp / lifetime byte
-offset of line's first byte). All integers big-endian; timestamps are seconds
-since epoch.
+Index format: 16-byte header (`>QQ` lifetime byte offset of segment start,
+lifetime byte offset where the line containing the segment's first byte
+began — equal when the segment starts at a line boundary), then append-only
+24-byte records (`>Qdq` line number / timestamp / lifetime byte offset of
+line's first byte). All integers big-endian; timestamps are seconds since
+epoch.
+
+Closed segments are exactly `segmentKb`; a line may span segments. Its record
+lives in the idx that was active when its `\n` arrived (always the segment
+containing that `\n`), and readers locate lines by byte offset, never by
+pairing per-segment newlines with records.
 """
 
 from __future__ import annotations
@@ -22,7 +29,7 @@ LOCK_NAME = "process.lock"
 DEAD_NAME = "deadAt"
 INCONSISTENT_MARKER = b"inconsistent\n"
 
-IDX_HEADER = struct.Struct(">Q")
+IDX_HEADER = struct.Struct(">QQ")
 IDX_HEADER_SIZE = IDX_HEADER.size
 IDX_RECORD = struct.Struct(">Qdq")
 IDX_RECORD_SIZE = IDX_RECORD.size
@@ -104,17 +111,30 @@ def read_meta(session_dir: Path) -> Meta | None:
         return None
 
 
-def read_segment_start(idx_path: Path) -> int | None:
-    """Lifetime start byte from the idx header. None if the file is missing or
-    shorter than the header."""
+def _read_header(idx_path: Path) -> tuple[int, int] | None:
     try:
         with idx_path.open("rb") as f:
             buf = f.read(IDX_HEADER_SIZE)
             if len(buf) < IDX_HEADER_SIZE:
                 return None
-            return IDX_HEADER.unpack(buf)[0]
+            return IDX_HEADER.unpack(buf)
     except FileNotFoundError:
         return None
+
+
+def read_segment_start(idx_path: Path) -> int | None:
+    """Lifetime start byte from the idx header. None if the file is missing or
+    shorter than the header."""
+    header = _read_header(idx_path)
+    return header[0] if header else None
+
+
+def read_segment_line_start(idx_path: Path) -> int | None:
+    """Lifetime start byte of the line containing the segment's first byte
+    (equals the segment start when it begins at a line boundary). None if
+    the file is missing or shorter than the header."""
+    header = _read_header(idx_path)
+    return header[1] if header else None
 
 
 def segment_tip_byte(idx_path: Path, stream_path: Path) -> int:
@@ -167,18 +187,24 @@ def idx_record_count(idx_path: Path) -> int:
     return (size - IDX_HEADER_SIZE) // IDX_RECORD_SIZE
 
 
-def first_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
-    """Return the first record as (line, timestamp, byte offset). None if no
-    records exist yet (header-only or missing file)."""
+def idx_record_at(idx_path: Path, i: int) -> tuple[int, float, int] | None:
+    """Return record `i` as (line, timestamp, byte offset). None if the file
+    is missing or holds fewer than i+1 records."""
     try:
         with idx_path.open("rb") as f:
-            f.seek(IDX_HEADER_SIZE)
+            f.seek(IDX_HEADER_SIZE + i * IDX_RECORD_SIZE)
             buf = f.read(IDX_RECORD_SIZE)
             if len(buf) < IDX_RECORD_SIZE:
                 return None
             return IDX_RECORD.unpack(buf)
     except FileNotFoundError:
         return None
+
+
+def first_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
+    """Return the first record as (line, timestamp, byte offset). None if no
+    records exist yet (header-only or missing file)."""
+    return idx_record_at(idx_path, 0)
 
 
 def last_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
@@ -200,7 +226,7 @@ def last_idx_record(idx_path: Path) -> tuple[int, float, int] | None:
 class Watermarks:
     first_segment: int
     last_segment: int
-    first_line: int  # 0 if no records
+    first_line: int  # first fully-retained line; 0 if none
     last_line: int  # 0 if no records
     first_byte: int  # 0 if no segments
     last_byte: int  # 0 if no segments
@@ -214,12 +240,24 @@ def compute_watermarks(session_dir: Path) -> Watermarks:
 
     first_byte = read_segment_start(session_dir / idx_name(segs[0])) or 0
 
+    # First fully-retained line: only the globally-first record can reference
+    # bytes below the floor (a line whose head was retained away); the record
+    # after it — same idx or a later one — always starts in range.
     first_n = 0
+    saw_truncated = False
     for seg in segs:
-        rec = first_idx_record(session_dir / idx_name(seg))
-        if rec is not None:
+        idx_path = session_dir / idx_name(seg)
+        rec = first_idx_record(idx_path)
+        if rec is None:
+            continue
+        if saw_truncated or rec[2] >= first_byte:
             first_n = rec[0]
             break
+        rec2 = idx_record_at(idx_path, 1)
+        if rec2 is not None:
+            first_n = rec2[0]
+            break
+        saw_truncated = True
 
     last_n = 0
     for seg in reversed(segs):
@@ -233,7 +271,7 @@ def compute_watermarks(session_dir: Path) -> Watermarks:
         session_dir / stream_name(segs[-1]),
     )
 
-    count = last_n - first_n + 1 if last_n else 0
+    count = last_n - first_n + 1 if first_n else 0
     return Watermarks(segs[0], segs[-1], first_n, last_n, first_byte, last_byte, count)
 
 

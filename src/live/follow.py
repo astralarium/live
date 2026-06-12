@@ -1,4 +1,4 @@
-"""`live tail -f` follow loop: stream new lines until the recorder exits or SIGINT."""
+"""`live tail -f` follow loop: stream new bytes until the recorder exits or SIGINT."""
 
 from __future__ import annotations
 
@@ -11,19 +11,12 @@ from .ansi import strip_ansi
 from .config import Config
 from .format import (
     LOCK_NAME,
+    compute_watermarks,
     idx_name,
     list_segments,
-    read_idx_records,
-    stream_name,
 )
 from .lock import probe_held
-from .reader import (
-    next_byte_of,
-    last_time_of,
-    lines_in_segment,
-    partial_tail_bytes,
-    stream_segment_bytes,
-)
+from .reader import last_time_of, load_stream_view
 from .session import SessionInfo, session_info
 from .verbose import emit_exit, emit_hung, emit_trailer
 from .watcher import new_watcher
@@ -41,20 +34,20 @@ def follow_session(
     *,
     cfg: Config,
     info: SessionInfo,
-    initial_cursor: int,
-    initial_partial_bytes: int = 0,
-    initial_partial_seg: int | None = None,
+    initial_byte: int,
     strip: bool,
 ) -> int:
-    """Emit new lines as they arrive; return 0 on clean exit."""
+    """Emit new bytes as they arrive; return 0 on clean exit.
+
+    The cursor is a lifetime byte offset — lines and partial-line bytes are
+    streamed uniformly, so a line spanning a rotation needs no special case.
+    """
     global _INTERRUPTED
     _INTERRUPTED = False
     prev_handler = signal.signal(signal.SIGINT, _on_sigint)
 
     session_dir = info.path
-    cursor = initial_cursor
-    partial_emitted = initial_partial_bytes
-    partial_seg: int | None = initial_partial_seg
+    cursor = initial_byte
     hung_emitted = False
 
     watcher = new_watcher()
@@ -95,10 +88,7 @@ def follow_session(
                 except OSError:
                     pass
 
-            new_cursor, partial_emitted, partial_seg = _emit_new_lines(
-                session_dir, cursor, strip,
-                partial_emitted=partial_emitted, partial_seg=partial_seg,
-            )
+            new_cursor = _emit_new_bytes(session_dir, cursor, strip)
             if new_cursor > cursor:
                 cursor = new_cursor
                 hung_emitted = False  # fresh activity clears the hung state
@@ -116,11 +106,7 @@ def follow_session(
                 continue
 
             # Lock released -> recorder exited. Drain anything left, then emit trailer.
-            final_cursor, _, _ = _emit_new_lines(
-                session_dir, cursor, strip,
-                partial_emitted=partial_emitted, partial_seg=partial_seg,
-            )
-            cursor = max(cursor, final_cursor)
+            cursor = max(cursor, _emit_new_bytes(session_dir, cursor, strip))
             _emit_exit_trailer(session_dir, info.id, cursor, cfg)
             return 0
 
@@ -130,72 +116,33 @@ def follow_session(
         signal.signal(signal.SIGINT, prev_handler)
 
 
-def _emit_new_lines(
-    session_dir: Path,
-    cursor: int,
-    strip: bool,
-    *,
-    partial_emitted: int,
-    partial_seg: int | None,
-) -> tuple[int, int, int | None]:
-    """Emit content past (cursor, partial_emitted on partial_seg). Returns updated state."""
-    segs = list_segments(session_dir)
-    new_cursor = cursor
-    new_partial_emitted = partial_emitted
-    new_partial_seg = partial_seg
-    out = bytearray()
-    if not segs:
-        return new_cursor, new_partial_emitted, new_partial_seg
+def _emit_new_bytes(session_dir: Path, cursor: int, strip: bool) -> int:
+    """Emit stream bytes past lifetime offset `cursor`; return the new cursor.
 
-    pending = partial_emitted
-    pending_seg = partial_seg
-
-    for seg in segs:
-        records = read_idx_records(session_dir / idx_name(seg))
-        stream = stream_segment_bytes(session_dir / stream_name(seg))
-        lines = lines_in_segment(stream, records)
-
-        for rec_idx, (n, _t, _b) in enumerate(records):
-            if n <= cursor or rec_idx >= len(lines):
-                continue
-            line = lines[rec_idx]
-            # Bytes already shown as partial are now absorbed into this line; trim.
-            if pending and pending_seg == seg:
-                line = line[pending:]
-                pending = 0
-                pending_seg = None
-            out.extend(line)
-            new_cursor = max(new_cursor, n)
-
-        # Partial tail can only live on the active segment (rotation is line-aligned).
-        if seg == segs[-1]:
-            tail = partial_tail_bytes(stream, records)
-            already = pending if pending_seg == seg else 0
-            if len(tail) > already:
-                out.extend(tail[already:])
-                new_partial_emitted = len(tail)
-                new_partial_seg = seg
-            elif len(tail) == 0:
-                new_partial_emitted = 0
-                new_partial_seg = None
-            else:
-                new_partial_emitted = len(tail)
-                new_partial_seg = seg
-
+    If retention outran the cursor, note the dropped span on stderr and
+    resume from the floor.
+    """
+    view = load_stream_view(session_dir, from_byte=cursor)
+    if view.base > cursor:
+        print(
+            f"live: dropped {view.base - cursor} bytes"
+            f" (from-byte={cursor}, first-byte={view.base})",
+            file=sys.stderr,
+        )
+    out = view.slice(max(cursor, view.base), view.tip)
     if out:
-        data = strip_ansi(bytes(out)) if strip else bytes(out)
+        data = strip_ansi(out) if strip else out
         try:
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
         except BrokenPipeError:
             pass
-    return new_cursor, new_partial_emitted, new_partial_seg
+    return max(cursor, view.tip)
 
 
 def _emit_exit_trailer(
     session_dir: Path, session_id: str, cursor: int, cfg: Config
 ) -> None:
     emit_exit(session_info(session_dir, cfg))
-    emit_trailer(
-        session_id, cursor + 1, next_byte_of(session_dir), last_time_of(session_dir)
-    )
+    next_line = compute_watermarks(session_dir).last_line + 1
+    emit_trailer(session_id, next_line, cursor, last_time_of(session_dir))

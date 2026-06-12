@@ -19,7 +19,8 @@ live run -dn server npm start  # detach: return immediately, print UUID
 ```
 
 The command's stdout and stderr are merged into one log.
-Large logs auto-rotate the older segments when they reach the cap.
+Logs are bounded: past the cap, old output is dropped.
+Reads report gaps on stderr.
 
 With `live run -d` the process survives shell exit.
 Read output later with `cat`/`tail`. End it with `live stop`.
@@ -55,10 +56,10 @@ With `-v`, log content goes to stdout and `live` metadata goes to stderr:
   `live: exit-code=<code>`
   or
   `live: exit=inconsistent`
-- gap: rotation dropped output
-  `live: dropped <k> lines (from-line=<N>, first-line=<F>)`
-  or
-  `live: dropped <k> bytes (from-byte=<B>, first-byte=<F>)`
+- hung: alive, but stalled
+  `live: status=hung last-activity=<s>`
+- gap: rotation dropped output (at most one per read)
+  `live: dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)`
 - partial: partial line (eg. progress bars)
   `live: partial-line bytes=<k> age=<s>`
 
