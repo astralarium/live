@@ -182,15 +182,38 @@ def read_segment_line_start(idx_path: Path) -> int | None:
     return header[1] if header else None
 
 
-def segment_tip_byte(idx_path: Path, stream_path: Path) -> int:
-    """Lifetime byte offset just past a segment's current contents (header
-    start + on-disk stream size). Partial-line bytes included; 0 if missing."""
-    start = read_segment_start(idx_path) or 0
-    try:
-        size = os.path.getsize(stream_path)
-    except FileNotFoundError:
-        size = 0
-    return start + size
+def resolve_seg_start(
+    seg: int, header_start: int | None, cursor: int | None
+) -> int | None:
+    """Lifetime start byte of a segment — the single placement rule. The idx
+    header is authoritative; without one, segment 0 starts the lifetime and
+    later segments sit at the predecessor's extent (`cursor`). None if
+    unplaceable."""
+    if header_start is not None:
+        return header_start
+    if seg == 0:
+        return 0
+    return cursor
+
+
+def _chained_start(session_dir: Path, segs: list[int]) -> int | None:
+    """Place the newest segment by chaining predecessor extents from the
+    nearest readable header. Torn-header fallback only: O(segments) reads."""
+    cursor: int | None = None
+    for seg in segs[:-1]:
+        start = resolve_seg_start(
+            seg, read_segment_start(session_dir / idx_name(seg)), cursor
+        )
+        if start is None:
+            cursor = None
+            continue
+        try:
+            size = os.path.getsize(session_dir / stream_name(seg))
+        except FileNotFoundError:
+            cursor = None
+            continue
+        cursor = start + size
+    return resolve_seg_start(segs[-1], None, cursor)
 
 
 def list_segments(session_dir: Path) -> list[int]:
@@ -340,7 +363,16 @@ def compute_watermarks(session_dir: Path) -> Watermarks:
     if not segs:
         return Watermarks(0, 0, 0, 0, 0)
 
-    first_byte = read_segment_start(session_dir / idx_name(segs[0])) or 0
+    # Floor: the oldest placeable segment's start. An unplaceable head is
+    # invisible to the stream walk, so it is invisible to the watermarks too.
+    first_byte = 0
+    for seg in segs:
+        start = resolve_seg_start(
+            seg, read_segment_start(session_dir / idx_name(seg)), None
+        )
+        if start is not None:
+            first_byte = start
+            break
 
     # First fully-retained line: only the globally-first record can reference
     # bytes below the floor (a line whose head was retained away); the record
@@ -368,10 +400,20 @@ def compute_watermarks(session_dir: Path) -> Watermarks:
             last_n = rec[0]
             break
 
-    last_byte = segment_tip_byte(
-        session_dir / idx_name(segs[-1]),
-        session_dir / stream_name(segs[-1]),
+    last_start = resolve_seg_start(
+        segs[-1], read_segment_start(session_dir / idx_name(segs[-1])), None
     )
+    if last_start is None:
+        last_start = _chained_start(session_dir, segs)
+    if last_start is None:
+        last_start = (
+            first_byte  # unplaceable tail: understated cursors re-read, never skip
+        )
+    try:
+        last_size = os.path.getsize(session_dir / stream_name(segs[-1]))
+    except FileNotFoundError:
+        last_size = 0
+    last_byte = last_start + last_size
 
     count = last_n - first_n + 1 if first_n else 0
     return Watermarks(first_n, last_n, first_byte, last_byte, count)

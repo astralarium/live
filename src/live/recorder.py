@@ -19,6 +19,7 @@ import pty
 import select
 import signal
 import struct
+import tempfile
 import termios
 import threading
 import time
@@ -140,23 +141,47 @@ class _Recorder:
         flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
         # Stream before idx — readers tolerate stream-without-idx, not the inverse.
         self.stream_fd = os.open(str(stream_path), flags, 0o600)
+        if not idx_path.exists():
+            self._create_idx(idx_path)
         self.idx_fd = os.open(str(idx_path), flags, 0o600)
         self.active_seg = seg
         self.stream_bytes = os.fstat(self.stream_fd).st_size
-        # Write the header on first open of a fresh idx: segment start, plus
-        # where the line open at that point began (lets readers report how
-        # many bytes of a head-truncated line retention dropped).
         if os.fstat(self.idx_fd).st_size == 0:
-            line_start = (
-                self.pending_line_start_byte
-                if self.pending_line_bytes and self.pending_line_start_byte is not None
-                else self.lifetime_bytes
-            )
-            self._write_all(
-                self.idx_fd, pack_idx_header(self.lifetime_bytes, line_start)
-            )
+            # Headerless idx (pre-atomic debris): repair in place.
+            self._write_all(self.idx_fd, self._idx_header())
         # pending_line_* is NOT reset: a partial line spans rotation.
         self.last_idx_touch = time.time()
+
+    def _idx_header(self) -> bytes:
+        """Header: segment start, plus where the line open at that point began
+        (lets readers report how many bytes of a head-truncated line retention
+        dropped)."""
+        line_start = (
+            self.pending_line_start_byte
+            if self.pending_line_bytes and self.pending_line_start_byte is not None
+            else self.lifetime_bytes
+        )
+        return pack_idx_header(self.lifetime_bytes, line_start)
+
+    def _create_idx(self, idx_path: Path) -> None:
+        """Create an idx with its header already in place (tempfile + rename):
+        readers never observe a headerless idx."""
+        fd, tmp = tempfile.mkstemp(prefix=".idx.", suffix=".tmp", dir=str(self.dir))
+        try:
+            self._write_all(fd, self._idx_header())
+            os.fsync(fd)
+            os.close(fd)
+            os.replace(tmp, str(idx_path))
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
 
     # ----- fork & PTY -----
 

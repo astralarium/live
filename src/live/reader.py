@@ -28,6 +28,7 @@ from .format import (
     read_idx_records,
     read_segment_line_start,
     read_segment_start,
+    resolve_seg_start,
     stream_name,
 )
 
@@ -148,17 +149,18 @@ def load_stream_view(session_dir: Path, *, from_byte: int | None = None) -> Stre
     chunks: list[bytes] = []
     length = 0
     records: list[tuple[int, float, int]] = []
-    cursor = 0
+    cursor: int | None = None  # lifetime end of the last placeable segment
     seeked = False
     for ref in refs:
-        start = read_segment_start(ref.idx_path)
+        start = resolve_seg_start(ref.seg, read_segment_start(ref.idx_path), cursor)
         if start is None:
-            start = cursor  # torn idx: assume contiguity with the previous segment
+            continue  # unplaceable torn idx: skip until a predecessor places it
         if from_byte is not None:
             try:
                 size = os.path.getsize(ref.stream_path)
             except FileNotFoundError:
-                size = 0
+                cursor = None  # vanished: next boundary unknown
+                continue
             if start + size <= from_byte:
                 cursor = start + size
                 continue
@@ -178,6 +180,7 @@ def load_stream_view(session_dir: Path, *, from_byte: int | None = None) -> Stre
             base, line_start, length = None, None, 0
             chunks.clear()
             records.clear()
+            cursor = None
             continue
         if base is not None and start != base + length:
             base, line_start, length = None, None, 0
@@ -233,7 +236,6 @@ class ReadResult:
     stdout: bytes
     # Stderr lines (without trailing newlines), in canonical order.
     stderr_lines: list[str]
-    first_emitted: int  # first n actually emitted (0 if none)
     last_line: (
         int  # highest emitted line number (0 if none); next-line cursor = last_line + 1
     )
@@ -243,14 +245,9 @@ class ReadResult:
     # 1-based lifetime position of the next unread byte; agents resume with
     # `tail -c +<next_byte>` (GNU-style inclusive start).
     next_byte: int
-    dropped: int  # k lines dropped (gap)
-    first_line: int  # retention floor: first n still fully on disk (0 if no full lines)
     partial_bytes: int  # k bytes in partial-line tail
     partial_age: float  # age of partial line in seconds (0.0 if none)
     emitted_byte: int  # lifetime offset just past the last stream byte in stdout
-    # Bytes missing from the head of the first emitted line (0 unless stdout
-    # starts at the retention floor mid-line).
-    dropped_first_bytes: int = 0
     # When set, stdout arrives by draining this iterator instead of `stdout`
     # (all read verbs stream: memory stays O(chunk), not O(range)). The
     # generator may append to `stderr_lines` and update the byte cursors as
@@ -359,15 +356,18 @@ def _scan_last_end(session_dir: Path, wm: Watermarks) -> int:
         return wm.first_byte
     # The first \n at/past the line's start byte is its terminator; the line
     # may span segments (rotation lands mid-line).
+    cursor: int | None = None
     for seg in segs:
         idx_path = session_dir / idx_name(seg)
-        start = read_segment_start(idx_path)
+        start = resolve_seg_start(seg, read_segment_start(idx_path), cursor)
         if start is None:
             continue
         try:
             size = os.path.getsize(session_dir / stream_name(seg))
         except FileNotFoundError:
+            cursor = None
             continue
+        cursor = start + size
         if start + size <= last_b:
             continue
         try:
@@ -469,6 +469,12 @@ def _partial_fields(
     return 0, 0.0
 
 
+def _byte_drop_notice(k: int, start: int, base: int) -> list[str]:
+    """`dropped` notice for `k` bytes spanning [start, base). Byte positions
+    are 1-based, matching `tail -c +K`."""
+    return [f"dropped {k} bytes (from-byte={start + 1}, first-byte={base + 1})"]
+
+
 def _gap_notice(
     j: int, effective_from: int, first_line: int, k: int, line_start: int, base: int
 ) -> list[str]:
@@ -487,23 +493,20 @@ def _gap_notice(
             f"dropped {j} lines (from-line={effective_from}, first-line={first_line})"
         ]
     if k:
-        return [
-            f"dropped {k} bytes (from-byte={line_start + 1}, first-byte={base + 1})"
-        ]
+        return _byte_drop_notice(k, line_start, base)
     return []
 
 
 def _floor_notice(
     session_dir: Path, stats: SessionStats, requested_from: int, start: int
-) -> tuple[int, int, list[str]]:
+) -> list[str]:
     """One gap notice for what retention dropped out of the REQUESTED range:
-    whole lines below the floor, plus the head of the first emitted line when
-    stdout starts at the floor (its original start comes from the first idx
-    header). A request fully satisfied from retained data gets no notice.
-    Returns (dropped_lines, dropped_first_bytes, stderr_lines)."""
+    wholly-missing lines below the floor, plus the head of the first emitted
+    line when stdout starts at the floor (its original start comes from the
+    first idx header). A line whose tail is emitted counts only in the byte
+    clause. A request fully satisfied from retained data gets no notice."""
     effective_from = max(requested_from, 1)
     first_line = stats.first_line
-    j = first_line - effective_from if first_line and effective_from < first_line else 0
     k = 0
     line_start = stats.base
     if start <= stats.base and stats.tip > stats.base:
@@ -513,7 +516,19 @@ def _floor_notice(
             if ls is not None and ls < stats.base:
                 line_start = ls
                 k = stats.base - ls
-    return j, k, _gap_notice(j, effective_from, first_line, k, line_start, stats.base)
+    gap_end = first_line - 1 if k and first_line else first_line
+    j = gap_end - effective_from if first_line and effective_from < gap_end else 0
+    return _gap_notice(j, effective_from, gap_end, k, line_start, stats.base)
+
+
+def _line_start_or_floor(session_dir: Path, stats: SessionStats, req_first: int) -> int:
+    """Start byte for a read whose first requested line is `req_first`: below
+    the floor it is the base (head-truncated suffix included), otherwise the
+    line's own offset, clamped to retained bytes."""
+    if stats.first_line and req_first < stats.first_line:
+        return stats.base
+    offset = _line_offset(session_dir, req_first)
+    return max(offset, stats.base) if offset is not None else stats.base
 
 
 def lines_since(
@@ -537,35 +552,29 @@ def lines_since(
 
     include_partial = stats.partial_len > 0 and effective_from <= stats.last_line + 1
     if stats.last_line and effective_from <= stats.last_line:
-        if effective_from <= stats.first_line:
-            start = stats.base  # from the floor (head-truncated suffix included)
-        else:
-            offset = _line_offset(session_dir, effective_from)
-            start = offset if offset is not None else stats.base
+        start = _line_start_or_floor(session_dir, stats, effective_from)
     elif include_partial:
         start = stats.last_end  # caught up at the open line
     else:
         # Cursor ahead of the stream (or nothing at all): no bytes to read.
+        # The byte cursor stops before any partial tail so it is never skipped.
+        partial_bytes, partial_age = _partial_fields(
+            stats.last_end, stats.tip, stats.last_time, stats.last_end, stats.tip
+        )
         return ReadResult(
             stdout=b"",
             stderr_lines=[],
-            first_emitted=0,
             last_line=stats.last_line,
             last_time=stats.last_time,
-            next_byte=stats.tip + 1,
-            dropped=0,
-            first_line=stats.first_line,
-            partial_bytes=0,
-            partial_age=0.0,
-            emitted_byte=stats.tip,
+            next_byte=stats.last_end + 1,
+            partial_bytes=partial_bytes,
+            partial_age=partial_age,
+            emitted_byte=stats.last_end,
         )
 
     end = None if include_partial else stats.last_end
-    dropped, head_dropped, stderr_lines = _floor_notice(
-        session_dir, stats, effective_from, start
-    )
+    stderr_lines = _floor_notice(session_dir, stats, effective_from, start)
 
-    emit_from = max(effective_from, stats.first_line) if stats.first_line else 0
     upto = stats.tip if end is None else end
     partial_bytes, partial_age = _partial_fields(
         stats.last_end, stats.tip, stats.last_time, start, upto
@@ -574,16 +583,12 @@ def lines_since(
     result = ReadResult(
         stdout=b"",
         stderr_lines=stderr_lines,
-        first_emitted=emit_from,
         last_line=stats.last_line,
         last_time=stats.last_time,
         next_byte=upto + 1,
-        dropped=dropped,
-        first_line=stats.first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         emitted_byte=upto,
-        dropped_first_bytes=head_dropped,
     )
     result.stdout_iter = _stream_range(session_dir, result, start=start, end=end)
     return result
@@ -606,29 +611,34 @@ def _stream_range(
     Lock-free against the writer, but yielded bytes cannot be revoked: a
     range that races retention becomes a `dropped` notice appended to
     `result.stderr_lines` instead of the snapshot loader's contiguity reset.
-    Once anything is emitted, the result's byte cursors are updated to what
-    was actually emitted."""
+    The byte cursors never claim more than was emitted: they advance with
+    emission and roll back when the walk ends short, so undelivered bytes
+    stay ahead of the resume cursor."""
     pos = start
     emitted = False
+    cursor: int | None = None  # lifetime end of the last placeable segment
     for seg in list_segments(session_dir):
         if end is not None and pos >= end:
             break
         stream_path = session_dir / stream_name(seg)
-        seg_start = read_segment_start(session_dir / idx_name(seg))
+        seg_start = resolve_seg_start(
+            seg, read_segment_start(session_dir / idx_name(seg)), cursor
+        )
         if seg_start is None:
-            seg_start = pos  # torn idx: assume contiguity
+            continue  # unplaceable torn idx: skip until a predecessor places it
         if end is not None and seg_start >= end:
             break
         try:
             size = os.path.getsize(stream_path)
         except FileNotFoundError:
+            cursor = None  # vanished: next boundary unknown
             continue
+        cursor = seg_start + size
         if seg_start + size <= pos:
             continue
         if seg_start > pos:
-            result.stderr_lines.append(
-                f"dropped {seg_start - pos} bytes"
-                f" (from-byte={pos + 1}, first-byte={seg_start + 1})"
+            result.stderr_lines.extend(
+                _byte_drop_notice(seg_start - pos, pos, seg_start)
             )
             pos = seg_start
         try:
@@ -649,7 +659,7 @@ def _stream_range(
                     yield chunk
         except FileNotFoundError:
             continue  # vanished mid-walk; the next segment gap-notices it
-    if emitted:
+    if emitted or pos < result.emitted_byte:
         result.emitted_byte = pos
         result.next_byte = pos + 1
 
@@ -666,12 +676,9 @@ def lines_since_time(session_dir: Path, *, from_time: float) -> ReadResult:
         return ReadResult(
             stdout=b"",
             stderr_lines=[],
-            first_emitted=0,
             last_line=stats.last_line,
             last_time=stats.last_time,
             next_byte=stats.tip + 1,
-            dropped=0,
-            first_line=stats.first_line,
             partial_bytes=0,
             partial_age=0.0,
             emitted_byte=stats.tip,
@@ -680,13 +687,9 @@ def lines_since_time(session_dir: Path, *, from_time: float) -> ReadResult:
     start = rec[2] if rec is not None else stats.last_end
     # Time cursors carry no line gap; only the head-drop clause can apply
     # (the first qualifying line's head was retained away).
-    head_dropped = 0
     trunc_lines: list[str] = []
     if start < stats.base:
-        head_dropped = stats.base - start
-        trunc_lines = _gap_notice(
-            0, 1, stats.first_line, head_dropped, start, stats.base
-        )
+        trunc_lines = _byte_drop_notice(stats.base - start, start, stats.base)
         start = stats.base
     end = None if include_partial else stats.last_end
 
@@ -697,16 +700,12 @@ def lines_since_time(session_dir: Path, *, from_time: float) -> ReadResult:
     result = ReadResult(
         stdout=b"",
         stderr_lines=trunc_lines,
-        first_emitted=0,
         last_line=stats.last_line,
         last_time=stats.last_time,
         next_byte=upto + 1,
-        dropped=0,
-        first_line=stats.first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         emitted_byte=upto,
-        dropped_first_bytes=head_dropped,
     )
     result.stdout_iter = _stream_range(session_dir, result, start=start, end=end)
     return result
@@ -747,12 +746,9 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
         return ReadResult(
             stdout=b"",
             stderr_lines=[],
-            first_emitted=0,
             last_line=0,
             last_time=stats.last_time,
             next_byte=stats.base + 1,
-            dropped=0,
-            first_line=stats.first_line,
             partial_bytes=0,
             partial_age=0.0,
             emitted_byte=stats.base,
@@ -764,12 +760,9 @@ def lines_until_time(session_dir: Path, *, until_t: float) -> ReadResult:
     result = ReadResult(
         stdout=b"",
         stderr_lines=[],
-        first_emitted=stats.first_line if end > start else 0,
         last_line=last_n,
         last_time=stats.last_time,
         next_byte=end + 1,
-        dropped=0,
-        first_line=stats.first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         emitted_byte=end,
@@ -824,12 +817,16 @@ def _head(
         else:
             end = min(stats.base + k, stats.tip)
         last_line = _last_line_within(session_dir, stats, end)
+        requested = end > start
     else:
         if drop_last:
             emitted = max(available + pad - (n_lines or 0), 0)
+            # The request spans lifetime lines, dropped ones included.
+            requested = stats.last_line + pad > (n_lines or 0)
         else:
             keep = 10 if n_lines is None else n_lines
             emitted = min(max(keep, 0), available + pad)
+            requested = keep > 0
         include_partial = emitted > available  # range covers the open line
         complete = min(emitted, available)
         if complete:
@@ -850,7 +847,8 @@ def _head(
         else:
             end = start  # nothing requested
         last_line = first_line + complete - 1 if (first_line and complete) else 0
-    dropped, head_dropped, stderr_lines = _floor_notice(session_dir, stats, 1, start)
+    # An empty request is trivially satisfied: no notice.
+    stderr_lines = _floor_notice(session_dir, stats, 1, start) if requested else []
 
     partial_bytes, partial_age = _partial_fields(
         stats.last_end, stats.tip, stats.last_time, start, end
@@ -858,16 +856,12 @@ def _head(
     result = ReadResult(
         stdout=b"",
         stderr_lines=stderr_lines,
-        first_emitted=first_line if last_line else 0,
         last_line=last_line,
         last_time=stats.last_time,
         next_byte=end + 1,
-        dropped=dropped,
-        first_line=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         emitted_byte=end,
-        dropped_first_bytes=head_dropped,
     )
     result.stdout_iter = _stream_range(session_dir, result, start=start, end=end)
     return result
@@ -884,21 +878,16 @@ def tail_last(
     head-truncated fragment included. Streams, reading only from the start
     of the requested range."""
     stats = load_stats(session_dir)
-    first_line = stats.first_line
-    available = stats.available
 
-    dropped = 0
-    head_dropped = 0
     stderr_lines: list[str] = []
     if c_bytes is not None:
         k = max(c_bytes, 0)
-        start = max(stats.tip - k, stats.base)
-        if stats.tip - k < stats.base and k <= stats.tip:
+        req_start = max(stats.tip - k, 0)  # window start, clamped to the lifetime
+        start = max(req_start, stats.base)
+        if req_start < stats.base:
             # The requested window dips below the retention floor.
-            head_dropped = stats.base - (stats.tip - k)
-            stderr_lines.append(
-                f"dropped {head_dropped} bytes"
-                f" (from-byte={stats.tip - k + 1}, first-byte={stats.base + 1})"
+            stderr_lines = _byte_drop_notice(
+                stats.base - req_start, req_start, stats.base
             )
     else:
         keep = 10 if n_lines is None else n_lines
@@ -907,34 +896,24 @@ def tail_last(
         req_first = stats.last_line - complete + 1
         if keep <= 0:
             start = stats.tip
-        elif complete > available:
-            start = stats.base
         elif complete <= 0:
             start = stats.last_end
         else:
-            offset = _line_offset(session_dir, req_first)
-            start = offset if offset is not None else stats.base
-        dropped, head_dropped, stderr_lines = _floor_notice(
-            session_dir, stats, req_first, start
-        )
+            start = _line_start_or_floor(session_dir, stats, req_first)
+        stderr_lines = _floor_notice(session_dir, stats, req_first, start)
 
-    emit_from = max(first_line, 1) if first_line else 0
     partial_bytes, partial_age = _partial_fields(
         stats.last_end, stats.tip, stats.last_time, start, stats.tip
     )
     result = ReadResult(
         stdout=b"",
         stderr_lines=stderr_lines,
-        first_emitted=emit_from,
         last_line=stats.last_line,
         last_time=stats.last_time,
         next_byte=stats.tip + 1,
-        dropped=dropped,
-        first_line=first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         emitted_byte=stats.tip,
-        dropped_first_bytes=head_dropped,
     )
     result.stdout_iter = _stream_range(session_dir, result, start=start)
     return result
@@ -955,14 +934,9 @@ def bytes_since(session_dir: Path, *, from_byte: int) -> ReadResult:
     stats = load_stats(session_dir)
 
     stderr_lines: list[str] = []
-    dropped = 0
     start = offset
     if offset < stats.base:
-        dropped = stats.base - offset
-        stderr_lines.append(
-            f"dropped {dropped} bytes"
-            f" (from-byte={offset + 1}, first-byte={stats.base + 1})"
-        )
+        stderr_lines = _byte_drop_notice(stats.base - offset, offset, stats.base)
         start = stats.base
 
     partial_bytes, partial_age = _partial_fields(
@@ -971,12 +945,9 @@ def bytes_since(session_dir: Path, *, from_byte: int) -> ReadResult:
     result = ReadResult(
         stdout=b"",
         stderr_lines=stderr_lines,
-        first_emitted=0,
         last_line=stats.last_line,
         last_time=stats.last_time,
         next_byte=stats.tip + 1,
-        dropped=dropped,
-        first_line=stats.first_line,
         partial_bytes=partial_bytes,
         partial_age=partial_age,
         emitted_byte=stats.tip,

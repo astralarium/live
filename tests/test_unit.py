@@ -18,16 +18,25 @@ from live.format import (
     IDX_VERSION,
     Meta,
     Watermarks,
+    compute_watermarks,
     count_complete_lines,
+    idx_name,
     idx_record_after,
     idx_record_count,
     last_idx_record,
     pack_idx_header,
     read_segment_start,
+    stream_name,
 )
 from live.reader import (
+    ReadResult,
     StreamView,
+    _stream_range,
+    head_first,
+    lines_since,
+    load_stream_view,
     should_strip_ansi,
+    tail_last,
 )
 from live.session import (
     NoSuchSelectorError,
@@ -139,6 +148,186 @@ def test_stream_view_line_spanning_offsets() -> None:
     v = _view(body, [(1, 0.0, 0), (2, 0.0, 101)])
     assert v.slice(v.start_of(1), v.end_of(1)) == b"x" * 100 + b"\n"
     assert v.slice(v.start_of(2), v.end_of(2)) == b"y\n"
+
+
+# ----- lines_since floor semantics -----
+
+
+def _truncated_session(tmp_path: Path) -> Path:
+    """A session where retention dropped segment 0 (offsets 0-9) mid-line:
+    line 2 began at offset 5 and only its tail survives; the floor is line 3."""
+    (tmp_path / stream_name(1)).write_bytes(b"BBBBB\nCCC\nDDD\n")
+    idx = pack_idx_header(10, 5)
+    idx += IDX_RECORD.pack(2, 1000.0, 5)
+    idx += IDX_RECORD.pack(3, 1001.0, 16)
+    idx += IDX_RECORD.pack(4, 1002.0, 20)
+    (tmp_path / idx_name(1)).write_bytes(idx)
+    return tmp_path
+
+
+def test_lines_since_floor_exact_excludes_truncated_fragment(tmp_path) -> None:
+    # A cursor exactly at the floor is fully satisfied from retained lines:
+    # no fragment of the prior line, no drop notice.
+    r = lines_since(_truncated_session(tmp_path), from_line=3)
+    assert b"".join(r.stdout_iter) == b"CCC\nDDD\n"
+    assert r.stderr_lines == []
+
+
+def test_lines_since_below_floor_includes_fragment_with_notice(tmp_path) -> None:
+    # Line 2's tail is emitted, so only its head bytes count as dropped.
+    r = lines_since(_truncated_session(tmp_path), from_line=2)
+    assert b"".join(r.stdout_iter) == b"BBBBB\nCCC\nDDD\n"
+    assert r.stderr_lines == ["dropped 5 bytes (from-byte=6, first-byte=11)"]
+
+
+def test_lines_since_gap_counts_only_whole_lines(tmp_path) -> None:
+    # Line 1 is wholly gone; line 2 appears only in the byte clause.
+    r = lines_since(_truncated_session(tmp_path), from_line=1)
+    assert b"".join(r.stdout_iter) == b"BBBBB\nCCC\nDDD\n"
+    assert r.stderr_lines == [
+        "dropped 1 lines + 5 bytes"
+        " (from-line=1, first-line=2, from-byte=6, first-byte=11)"
+    ]
+
+
+def test_lines_since_cursor_past_stream_preserves_partial(tmp_path) -> None:
+    # An over-advanced line cursor must not move the byte cursor past the
+    # unterminated tail.
+    (tmp_path / stream_name(0)).write_bytes(b"AAA\nBB")
+    idx = pack_idx_header(0, 0)
+    idx += IDX_RECORD.pack(1, 1000.0, 0)
+    (tmp_path / idx_name(0)).write_bytes(idx)
+    r = lines_since(tmp_path, from_line=5)
+    assert (r.emitted_byte, r.next_byte) == (4, 5)
+    assert r.partial_bytes == 2
+
+
+def _tail_only_session(tmp_path: Path) -> Path:
+    """Retention kept only the tail of line 1 (offsets 5-15): no line is
+    fully on disk, so the floor is 0 and the line's offset lies below base."""
+    (tmp_path / stream_name(1)).write_bytes(b"AAAAA\n")
+    idx = pack_idx_header(10, 5)
+    idx += IDX_RECORD.pack(1, 1000.0, 5)
+    (tmp_path / idx_name(1)).write_bytes(idx)
+    return tmp_path
+
+
+def test_lines_since_no_full_lines_single_notice(tmp_path) -> None:
+    # The below-base line offset is clamped to the floor: one notice,
+    # not one each from the floor check and the stream walk.
+    r = lines_since(_tail_only_session(tmp_path), from_line=1)
+    assert b"".join(r.stdout_iter) == b"AAAAA\n"
+    assert r.stderr_lines == ["dropped 5 bytes (from-byte=6, first-byte=11)"]
+
+
+def test_tail_last_bytes_window_past_lifetime_reports_drop(tmp_path) -> None:
+    # A window larger than the lifetime still covers the dropped head.
+    r = tail_last(_truncated_session(tmp_path), c_bytes=999)
+    assert b"".join(r.stdout_iter) == b"BBBBB\nCCC\nDDD\n"
+    assert r.stderr_lines == ["dropped 10 bytes (from-byte=1, first-byte=11)"]
+
+
+def test_head_empty_request_no_notice(tmp_path) -> None:
+    session = _truncated_session(tmp_path)
+    for r in (head_first(session, n_lines=0), head_first(session, c_bytes=0)):
+        assert b"".join(r.stdout_iter) == b""
+        assert r.stderr_lines == []
+    nonempty = head_first(session, n_lines=1)
+    assert any(line.startswith("dropped") for line in nonempty.stderr_lines)
+
+
+# ----- _stream_range torn-idx placement -----
+
+
+def _range_result(*, next_byte: int = 0, emitted_byte: int = 0) -> ReadResult:
+    return ReadResult(
+        stdout=b"",
+        stderr_lines=[],
+        last_line=0,
+        last_time=0.0,
+        next_byte=next_byte,
+        partial_bytes=0,
+        partial_age=0.0,
+        emitted_byte=emitted_byte,
+    )
+
+
+def test_stream_range_places_torn_idx_via_predecessor(tmp_path) -> None:
+    # Segment 1's idx header is unreadable; segment 0's extent places it.
+    (tmp_path / stream_name(0)).write_bytes(b"AAAA\nBBBB\n")
+    (tmp_path / idx_name(0)).write_bytes(pack_idx_header(0, 0))
+    (tmp_path / stream_name(1)).write_bytes(b"CCCC\nDD")
+    (tmp_path / idx_name(1)).write_bytes(b"")
+    out = b"".join(_stream_range(tmp_path, _range_result(), start=12))
+    assert out == b"CC\nDD"
+
+
+def test_stream_range_places_torn_idx_segment_zero(tmp_path) -> None:
+    # Segment 0 needs no header: it starts the lifetime at byte 0.
+    (tmp_path / stream_name(0)).write_bytes(b"AAAA\nBBBB\n")
+    (tmp_path / idx_name(0)).write_bytes(b"")
+    out = b"".join(_stream_range(tmp_path, _range_result(), start=2))
+    assert out == b"AA\nBBBB\n"
+
+
+def test_stream_range_skips_unplaceable_torn_idx(tmp_path) -> None:
+    # No predecessor places the torn segment: skip it, don't guess.
+    (tmp_path / stream_name(1)).write_bytes(b"CCCC\nDD")
+    (tmp_path / idx_name(1)).write_bytes(b"")
+    result = _range_result()
+    assert b"".join(_stream_range(tmp_path, result, start=12)) == b""
+
+
+def test_stream_range_skip_rolls_back_cursor(tmp_path) -> None:
+    # Cursors precomputed from stats roll back to what was actually
+    # emitted, so the skipped bytes are re-offered to the next read.
+    (tmp_path / stream_name(1)).write_bytes(b"CCCC\nDD")
+    (tmp_path / idx_name(1)).write_bytes(b"")
+    result = _range_result(next_byte=8, emitted_byte=7)
+    assert b"".join(_stream_range(tmp_path, result, start=0)) == b""
+    assert (result.emitted_byte, result.next_byte) == (0, 1)
+
+
+# ----- segment placement (one rule across stats, snapshot, and walk) -----
+
+
+def test_watermarks_torn_newest_header_chains_from_predecessor(tmp_path) -> None:
+    (tmp_path / stream_name(0)).write_bytes(b"AAAA\nBBBB\n")
+    idx = pack_idx_header(0, 0)
+    idx += IDX_RECORD.pack(1, 1000.0, 0)
+    idx += IDX_RECORD.pack(2, 1001.0, 5)
+    (tmp_path / idx_name(0)).write_bytes(idx)
+    (tmp_path / stream_name(1)).write_bytes(b"CC")
+    (tmp_path / idx_name(1)).write_bytes(b"")
+    wm = compute_watermarks(tmp_path)
+    assert wm.last_byte == 12  # segment 0's extent (10) + 2 bytes
+
+
+def test_watermarks_torn_oldest_header_floor_from_next_placeable(tmp_path) -> None:
+    (tmp_path / stream_name(1)).write_bytes(b"XX")
+    (tmp_path / idx_name(1)).write_bytes(b"")
+    idx = pack_idx_header(10, 10)
+    idx += IDX_RECORD.pack(4, 1000.0, 10)
+    (tmp_path / stream_name(2)).write_bytes(b"CCC\n")
+    (tmp_path / idx_name(2)).write_bytes(idx)
+    wm = compute_watermarks(tmp_path)
+    assert wm.first_byte == 10
+    assert wm.last_byte == 14
+
+
+def test_load_stream_view_places_torn_seg0_at_zero(tmp_path) -> None:
+    (tmp_path / stream_name(0)).write_bytes(b"AAAA\n")
+    (tmp_path / idx_name(0)).write_bytes(b"")
+    v = load_stream_view(tmp_path)
+    assert (v.base, v.data) == (0, b"AAAA\n")
+
+
+def test_load_stream_view_skips_unplaceable_torn_idx(tmp_path) -> None:
+    # Same rule as the stream walk: no predecessor places it, don't guess.
+    (tmp_path / stream_name(1)).write_bytes(b"CCCC\nDD")
+    (tmp_path / idx_name(1)).write_bytes(b"")
+    v = load_stream_view(tmp_path)
+    assert v.data == b""
 
 
 # ----- format helpers -----

@@ -52,7 +52,7 @@ live: id=<uuid> next-line=<N> next-byte=<B> last-time=<T>
 
 Possible preceding lines, in order:
 
-- `dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)` — gap; at most one per read. Either clause may drop out with its key pair; the byte clause spans `[from-byte, first-byte)` — for line reads, the missing beginning of the first emitted line.
+- `dropped <j> lines + <k> bytes (from-line=<N>, first-line=<F>, from-byte=<B0>, first-byte=<B1>)` — gap; at most one per read. Either clause may drop out with its key pair. The line clause counts wholly-missing lines spanning `[from-line, first-line)`; the byte clause spans `[from-byte, first-byte)` — for line reads, the missing beginning of the first emitted line, which is counted only here.
 - `from-line=<N> > next-line=<N>; check id` (or the `from-time` / `from-byte` analogues) — cursor ahead of the stream.
 - `partial-line bytes=<k> age=<s>` — unterminated tail (e.g. a progress bar).
 - `status=hung last-activity=<s>` — alive but stalled.
